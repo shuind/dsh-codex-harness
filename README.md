@@ -11,27 +11,6 @@
 - **远程搜索与压缩**：OpenAI Responses 请求默认优先使用 hosted `web_search` 和 `/responses/compact`；失败时回退到 DSH 的本地实现。
 - **上下文容量**：在 Web 中设置 `1K`–`1000K` tokens，设置值作用于下一次请求。
 
-## 可选协作提示词（私货）
-
-这段提示词默认关闭，不会注入系统提示词。需要时，在自定义 `agent.cordis.yml` 中开启：
-
-```yaml
-- id: codex-tools
-  name: '@shuind/dsh-codex-harness'
-  config:
-    collaborationPrompt: true
-```
-
-开启后，Codex preset 会在系统提示词中注入以下协作要求：
-
-```text
-Ask, align, and clarify whenever uncertainty, assumptions, tradeoffs, or decisions could materially affect the outcome.
-Understand the user's full picture, align it with your own, and leave no hidden assumptions or gaps.
-Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done.
-Convey enough valuable information with as few words as possible. Stay focused on the end goal.
-Solve problems by thinking from first principles and at a higher level.
-Make things as effortless as possible for the user.
-```
 ## 安装
 
 ```sh
@@ -79,6 +58,28 @@ Fast 设置保存在 `codex` 命名空间，只对 Codex preset 生效。
 ```yaml
 - id: codex-tools
   name: '@shuind/dsh-codex-harness'
+```
+
+### 可选协作提示词（私货）
+
+这段提示词默认关闭，不会注入系统提示词。需要时，在自定义 `agent.cordis.yml` 中开启：
+
+```yaml
+- id: codex-tools
+  name: '@shuind/dsh-codex-harness'
+  config:
+    collaborationPrompt: true
+```
+
+开启后，Codex preset 会在系统提示词中注入以下协作要求：
+
+```text
+Ask, align, and clarify whenever uncertainty, assumptions, tradeoffs, or decisions could materially affect the outcome.
+Understand the user's full picture, align it with your own, and leave no hidden assumptions or gaps.
+Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done.
+Convey enough valuable information with as few words as possible. Stay focused on the end goal.
+Solve problems by thinking from first principles and at a higher level.
+Make things as effortless as possible for the user.
 ```
 
 如果需要保留 Codex preset 的完整工具、搜索、压缩和 Skills 组合，建议直接使用随包提供的 `presets/codex`。
