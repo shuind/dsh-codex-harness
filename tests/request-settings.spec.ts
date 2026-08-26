@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { applyCodexRequestSettings } from '../src/index.ts'
+import { applyCodexRequestSettings, buildCodexSystemPrompt, Config } from '../src/index.ts'
 
 describe('Codex request settings', () => {
+  it('keeps the collaboration prompt off by default and enables it explicitly', () => {
+    expect(Config().collaborationPrompt).toBe(false)
+    expect(buildCodexSystemPrompt()).not.toContain('## Collaboration')
+
+    expect(Config({ collaborationPrompt: true }).collaborationPrompt).toBe(true)
+    expect(buildCodexSystemPrompt({ collaborationPrompt: true })).toContain('## Collaboration')
+  })
+
   it('maps Fast to the priority service tier and carries a context override', () => {
     const result = applyCodexRequestSettings({
       provider: 'relay',

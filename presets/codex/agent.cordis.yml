@@ -17,6 +17,8 @@
 # and the four Codex core tool names; execution remains delegated to dsh.
 - id: codex-tools
   name: '@shuind/dsh-codex-harness'
+  config:
+    collaborationPrompt: false
 
 # The generic DSH pi-ai adapter still owns the user's configured provider,
 # endpoint, API key, and model. Codex's remote-first transport wrapper is

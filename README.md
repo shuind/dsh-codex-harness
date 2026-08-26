@@ -11,9 +11,18 @@
 - **远程搜索与压缩**：OpenAI Responses 请求默认优先使用 hosted `web_search` 和 `/responses/compact`；失败时回退到 DSH 的本地实现。
 - **上下文容量**：在 Web 中设置 `1K`–`1000K` tokens，设置值作用于下一次请求。
 
-## 注入的系统提示词
+## 可选协作提示词（私货）
 
-Codex preset 会在系统提示词中注入以下协作要求：
+这段提示词默认关闭，不会注入系统提示词。需要时，在自定义 `agent.cordis.yml` 中开启：
+
+```yaml
+- id: codex-tools
+  name: '@shuind/dsh-codex-harness'
+  config:
+    collaborationPrompt: true
+```
+
+开启后，Codex preset 会在系统提示词中注入以下协作要求：
 
 ```text
 Ask, align, and clarify whenever uncertainty, assumptions, tradeoffs, or decisions could materially affect the outcome.
@@ -23,11 +32,10 @@ Convey enough valuable information with as few words as possible. Stay focused o
 Solve problems by thinking from first principles and at a higher level.
 Make things as effortless as possible for the user.
 ```
-
 ## 安装
 
 ```sh
-dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.14
+dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.15
 ```
 
 重启 Web，创建新会话，在模式菜单中选择 **Codex 模式**。

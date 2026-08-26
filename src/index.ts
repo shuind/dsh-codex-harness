@@ -49,6 +49,8 @@ export interface Config {
   hostedWebSearch?: boolean
   /** Use the provider's /responses/compact endpoint before local compaction. */
   remoteCompact?: boolean
+  /** Inject the optional collaboration guidance into the model system prompt. */
+  collaborationPrompt?: boolean
 }
 
 /** Runtime configuration schema for the Codex tool bridge. */
@@ -59,6 +61,7 @@ export const Config: z<Config> = z.object({
   maxOutputBytes: z.number().step(1).min(1).default(64_000),
   hostedWebSearch: z.boolean().default(true),
   remoteCompact: z.boolean().default(true),
+  collaborationPrompt: z.boolean().default(false),
 })
 
 const LLM_PI_AI_SETTINGS = settingsNamespace('llm-pi-ai')
@@ -223,15 +226,6 @@ const CODEX_BASE_PROMPT = String.raw`You are Codex, based on {{model}}. You are 
 
 - When searching for text or files, prefer using rg or rg --files respectively because rg is much faster than alternatives like grep. If rg is not available, use the next best alternative.
 
-## Collaboration
-
-- Ask, align, and clarify whenever uncertainty, assumptions, tradeoffs, or decisions could materially affect the outcome.
-- Understand the user's full picture, align it with your own, and leave no hidden assumptions or gaps.
-- Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done.
-- Convey enough valuable information with as few words as possible. Stay focused on the end goal.
-- Solve problems by thinking from first principles and at a higher level.
-- Make things as effortless as possible for the user.
-
 ## Editing constraints
 
 - Default to ASCII when editing or creating files. Only introduce non-ASCII or other Unicode characters when there is a clear justification and the file already uses them.
@@ -265,6 +259,23 @@ const CODEX_BASE_PROMPT = String.raw`You are Codex, based on {{model}}. You are 
 - Do not dump large files into the conversation; refer to their paths.
 - Use plain text with short sections only when they improve scanability.
 `
+
+const CODEX_COLLABORATION_PROMPT = String.raw`## Collaboration
+
+- Ask, align, and clarify whenever uncertainty, assumptions, tradeoffs, or decisions could materially affect the outcome.
+- Understand the user's full picture, align it with your own, and leave no hidden assumptions or gaps.
+- Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done.
+- Convey enough valuable information with as few words as possible. Stay focused on the end goal.
+- Solve problems by thinking from first principles and at a higher level.
+- Make things as effortless as possible for the user.
+`
+
+/** Build the Codex system prompt with optional, user-enabled collaboration guidance. */
+export function buildCodexSystemPrompt(config: Pick<Config, 'collaborationPrompt'> = {}): string {
+  return config.collaborationPrompt === true
+    ? `${CODEX_BASE_PROMPT}\n\n${CODEX_COLLABORATION_PROMPT}`
+    : CODEX_BASE_PROMPT
+}
 
 const EXEC_COMMAND_DESCRIPTION = 'Runs a command in a PTY, returning output or a session ID for ongoing interaction.'
 const WRITE_STDIN_DESCRIPTION = 'Writes characters to an existing unified exec session and returns recent output.'
@@ -581,6 +592,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     maxOutputBytes: config.maxOutputBytes ?? 64_000,
     hostedWebSearch: config.hostedWebSearch ?? true,
     remoteCompact: config.remoteCompact ?? true,
+    collaborationPrompt: config.collaborationPrompt ?? false,
   }
   if (ctx.fs.sandboxMode !== undefined && ctx.get('sandboxPolicy') === undefined) {
     throw new Error('codex: a sandboxing filesystem requires ctx.sandboxPolicy')
@@ -614,7 +626,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       return next()
     }) as any)
   }
-  ctx.systemPrompt.section({ name: 'codex:base', order: 10, text: CODEX_BASE_PROMPT })
+  ctx.systemPrompt.section({ name: 'codex:base', order: 10, text: buildCodexSystemPrompt(resolved) })
   registerExecTools(ctx, resolved)
   registerPatchTool(ctx)
   registerPlanTool(ctx)
