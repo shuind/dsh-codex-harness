@@ -53,12 +53,37 @@ Fast 设置保存在 `codex` 命名空间，只对 Codex preset 生效。
 
 ## 自定义 preset
 
-在自定义 `agent.cordis.yml` 中挂载 Codex 工具层：
+如果直接使用插件提供的 Codex 模式，不需要自定义 preset。只有在想自己组合工具、提示词，或修改插件配置时才需要。
+
+自定义 preset 放在 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/` 目录中。
+
+### 示例：创建一个带协作提示词的 Codex preset
+
+例如创建目录 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/my-codex/`，并写入 `agent.cordis.yml`：
 
 ```yaml
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: 你是一个使用 DSH 工具工作的 Codex 编程助手。
+
 - id: codex-tools
   name: '@shuind/dsh-codex-harness'
+  config:
+    collaborationPrompt: true
 ```
+
+再写入 `preset.yml`，让 Web 中显示更清晰的名称：
+
+```yaml
+name: My Codex
+description: 使用 Codex 工具并开启可选协作提示词。
+order: 10
+```
+
+然后在 Web 的 **Agent 预设** 中选择 `My Codex`，再新建会话。这个 preset 会加载 Codex 工具，并开启协作提示词；网页搜索、远程压缩和 Skills 等其他功能需要在同一个 `agent.cordis.yml` 中按需添加。
+
+如果需要完整的 Codex 工具、搜索、压缩和 Skills 组合，建议直接使用随包提供的 `presets/codex`。
 
 ### 可选协作提示词（私货）
 
@@ -81,8 +106,6 @@ Convey enough valuable information with as few words as possible. Stay focused o
 Solve problems by thinking from first principles and at a higher level.
 Make things as effortless as possible for the user.
 ```
-
-如果需要保留 Codex preset 的完整工具、搜索、压缩和 Skills 组合，建议直接使用随包提供的 `presets/codex`。
 
 ## 注意事项
 
