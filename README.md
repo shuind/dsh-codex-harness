@@ -14,7 +14,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.13
+dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.14
 ```
 
 重启 Web，创建新会话，在模式菜单中选择 **Codex 模式**。
