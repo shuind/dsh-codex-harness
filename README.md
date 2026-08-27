@@ -51,11 +51,15 @@ Fast 设置保存在 `codex` 命名空间，只对 Codex preset 生效。
 
 上下文容量使用整数 K tokens，范围为 `1K` 到 `1000K`。实际可用上限仍取决于模型和中转站支持情况。
 
+## 随包提供的 Codex preset
+
+安装插件后，首次启动对应的 DSH profile 时，插件会把完整 preset 从随包提供的 `presets/codex` 安装到 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/codex/`；如果你已经创建了同名 preset，插件会保留你的文件。普通用户不需要自己创建 preset。
+
+在 Web 的 **Agent 预设** 中选择 **Codex**，再新建会话即可使用随包提供的 Codex 工具、网页搜索、远程压缩和 Skills 组合。Fast、思考强度、GPT 图片输入和上下文容量可以在对应的设置位置配置。
+
 ## 自定义 preset
 
-如果直接使用插件提供的 Codex 模式，不需要自定义 preset。只有在想自己组合工具、提示词，或修改插件配置时才需要。
-
-自定义 preset 放在 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/` 目录中。
+只有在想自己组合工具、提示词，或修改插件配置时才需要自定义 preset。自定义 preset 放在 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/` 目录中。
 
 ### 示例：创建一个带协作提示词的 Codex preset
 
@@ -82,8 +86,6 @@ order: 10
 ```
 
 然后在 Web 的 **Agent 预设** 中选择 `My Codex`，再新建会话。这个 preset 会加载 Codex 工具，并开启协作提示词；网页搜索、远程压缩和 Skills 等其他功能需要在同一个 `agent.cordis.yml` 中按需添加。
-
-如果需要完整的 Codex 工具、搜索、压缩和 Skills 组合，建议直接使用随包提供的 `presets/codex`。
 
 ### 可选协作提示词（私货）
 
