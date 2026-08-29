@@ -18,6 +18,15 @@ describe('Codex apply_patch language', () => {
       .toEqual([{ kind: 'update', path: 'old.txt', moveTo: 'new.txt', hunks: [] }])
   })
 
+  it('accepts the optional environment preamble and Codex lenient heredoc wrapper', () => {
+    expect(parsePatch("<<'EOF'\n*** Begin Patch\n*** Environment ID: remote\n*** Add File: new.txt\n+one\n*** End Patch\nEOF\n"))
+      .toEqual([{ kind: 'add', path: 'new.txt', content: 'one\n' }])
+    expect(() => parsePatch('*** Begin Patch\n*** Environment ID:   \n*** Add File: new.txt\n+one\n*** End Patch'))
+      .toThrow('environment id cannot be empty')
+    expect(() => parsePatch('*** Begin Patch\n*** Environment ID: first\n*** Environment ID: second\n*** Add File: new.txt\n+one\n*** End Patch'))
+      .toThrow('environment id cannot be specified more than once')
+  })
+
   it('normalizes CRLF input and honors the end-of-file marker', () => {
     const [file] = parsePatch('*** Begin Patch\r\n*** Update File: file.txt\r\n@@\r\n-a\r\n+b\r\n@@\r\n-c\r\n+d\r\n*** End of File\r\n*** End Patch\r\n')
     if (file?.kind !== 'update') throw new Error('expected an update patch')
@@ -39,7 +48,8 @@ describe('Codex apply_patch language', () => {
   })
 
   it('publishes the OpenAI custom grammar used by the freeform tool', () => {
-    expect(APPLY_PATCH_GRAMMAR).toContain('start: begin_patch hunk+ end_patch')
+    expect(APPLY_PATCH_GRAMMAR).toContain('start: begin_patch environment_id? hunk+ end_patch')
+    expect(APPLY_PATCH_GRAMMAR).toContain('environment_id: "*** Environment ID: " filename LF')
     expect(APPLY_PATCH_GRAMMAR).toContain('*** Add File: ')
     expect(APPLY_PATCH_GRAMMAR).toContain('*** End of File')
     expect(APPLY_PATCH_GRAMMAR).toContain('%import common.LF')

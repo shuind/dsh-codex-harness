@@ -1,8 +1,9 @@
 /** Parser and line-oriented applicator for Codex's `apply_patch` language. */
 
 /** The grammar sent to providers that support OpenAI custom grammar tools. */
-export const APPLY_PATCH_GRAMMAR = String.raw`start: begin_patch hunk+ end_patch
+export const APPLY_PATCH_GRAMMAR = String.raw`start: begin_patch environment_id? hunk+ end_patch
 begin_patch: "*** Begin Patch" LF
+environment_id: "*** Environment ID: " filename LF
 end_patch: "*** End Patch" LF?
 hunk: add_hunk | delete_hunk | update_hunk
 add_hunk: "*** Add File: " filename LF add_line+
@@ -45,6 +46,21 @@ function isFileHeader(line: string): boolean {
     || trimmed.startsWith('*** Update File: ')
 }
 
+const ENVIRONMENT_ID_MARKER = '*** Environment ID:'
+
+function unwrapHeredoc(input: string): string {
+  const normalized = input.replaceAll('\r\n', '\n').trim()
+  const lines = normalized.split('\n')
+  const first = lines[0]?.trim()
+  const last = lines.at(-1)?.trim()
+  if (lines.length >= 4
+    && (first === '<<EOF' || first === "<<'EOF'" || first === '<<"EOF"')
+    && last === 'EOF') {
+    return lines.slice(1, -1).join('\n').trim()
+  }
+  return normalized
+}
+
 function pathFrom(line: string, prefix: string): string {
   const path = line.slice(prefix.length).trim()
   if (path.length === 0) invalid(`${prefix.trim()} requires a file path`)
@@ -62,13 +78,21 @@ function isPotentialChangeMarker(line: string): boolean {
 
 /** Parse one complete Codex patch after normalizing CRLF input to LF. */
 export function parsePatch(input: string): PatchFile[] {
-  const lines = input.replaceAll('\r\n', '\n').trim().split('\n')
+  const lines = unwrapHeredoc(input).split('\n')
   if (lines[0]?.trim() !== '*** Begin Patch') invalid('input must start with "*** Begin Patch"')
   if (lines.at(-1)?.trim() !== '*** End Patch') invalid('input must end with "*** End Patch"')
 
   const files: PatchFile[] = []
   let index = 1
   const end = lines.length - 1
+  if (lines[index]?.trim().startsWith(ENVIRONMENT_ID_MARKER) === true) {
+    const environmentId = lines[index]!.trim().slice(ENVIRONMENT_ID_MARKER.length).trim()
+    if (environmentId.length === 0) invalid('environment id cannot be empty')
+    index++
+    if (lines[index]?.trim().startsWith(ENVIRONMENT_ID_MARKER) === true) {
+      invalid('environment id cannot be specified more than once')
+    }
+  }
   while (index < end) {
     const header = lines[index++]?.trim()
     if (header === undefined) invalid('unexpected end of input')

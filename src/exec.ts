@@ -63,6 +63,12 @@ interface AgentExecState {
 }
 
 const STATES = new WeakMap<Agent, AgentExecState>()
+const MIN_YIELD_TIME_MS = 250
+const MIN_EMPTY_YIELD_TIME_MS = 5_000
+const MAX_YIELD_TIME_MS = 30_000
+const MAX_EMPTY_YIELD_TIME_MS = 300_000
+const DEFAULT_OUTPUT_TOKENS = 10_000
+const APPROX_BYTES_PER_TOKEN = 4
 
 function stateFor(agent: Agent): AgentExecState {
   const current = STATES.get(agent)
@@ -78,14 +84,16 @@ function positiveFinite(name: string, value: number | undefined): void {
   }
 }
 
-function waitMs(value: number | undefined, fallback: number): number {
-  return Math.max(0, Math.min(30_000, Math.trunc(value ?? fallback)))
+export function normalizeWaitMs(value: number | undefined, fallback: number, empty = false): number {
+  const lower = empty ? MIN_EMPTY_YIELD_TIME_MS : MIN_YIELD_TIME_MS
+  const upper = empty ? MAX_EMPTY_YIELD_TIME_MS : MAX_YIELD_TIME_MS
+  return Math.max(lower, Math.min(upper, Math.trunc(value ?? fallback)))
 }
 
 function outputLimit(maxOutputBytes: number, maxOutputTokens: number | undefined): number {
-  if (maxOutputTokens === undefined) return maxOutputBytes
-  positiveFinite('max_output_tokens', maxOutputTokens)
-  return Math.max(1, Math.min(maxOutputBytes, Math.trunc(maxOutputTokens * 4)))
+  const tokens = maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS
+  if (maxOutputTokens !== undefined) positiveFinite('max_output_tokens', maxOutputTokens)
+  return Math.max(1, Math.min(maxOutputBytes, Math.trunc(tokens * APPROX_BYTES_PER_TOKEN)))
 }
 
 function limitOutput(text: string, maxBytes: number): string {
@@ -164,6 +172,13 @@ async function waitForShell(process: ShellProcess, ms: number, signal: AbortSign
   return completed === true || process.status !== 'running'
 }
 
+/** Stop a pipe-backed session when the current Codex tool is cancelled. */
+async function stopShellOnAbort(process: ShellProcess, signal: AbortSignal): Promise<void> {
+  if (!signal.aborted || process.status !== 'running') return
+  process.kill()
+  await process.done
+}
+
 function allocateSession(agent: Agent, session: StoredSession): number {
   const state = stateFor(agent)
   const id = ++state.nextId
@@ -213,21 +228,30 @@ export async function runExecCommand(
       ...workdir === undefined ? {} : { cwd: workdir },
     }
     const spawned = await terminals.spawn(agent, spawnRequest, exec.signal)
-    const sendRequest: CodexTerminalSendRequest = {
-      text: commandFor(args),
-      submit: true,
-      waitMs: waitMs(args.yield_time_ms, config.defaultYieldTimeMs),
-      signal: exec.signal,
+    let retained = false
+    let closeReason = 'Codex command failed'
+    try {
+      const sendRequest: CodexTerminalSendRequest = {
+        text: commandFor(args),
+        submit: true,
+        waitMs: normalizeWaitMs(args.yield_time_ms, config.defaultYieldTimeMs),
+        signal: exec.signal,
+      }
+      const operation = terminals.startSend(agent, spawned.sessionId, sendRequest)
+      const result = await operation.done
+      const output = terminalResult(result, maxBytes, startedAt)
+      if (result.sessionStatus.kind === 'running') {
+        output.session_id = allocateSession(agent, { kind: 'terminal', owner: agent, id: spawned.sessionId })
+        retained = true
+      } else {
+        closeReason = 'Codex command exited'
+      }
+      return output
+    } finally {
+      // A PTY is published by spawn before the first send starts. Do not leave
+      // that session behind when send setup or its foreground operation fails.
+      if (!retained) await terminals.kill(agent, spawned.sessionId, closeReason)
     }
-    const operation = terminals.startSend(agent, spawned.sessionId, sendRequest)
-    const result = await operation.done
-    const output = terminalResult(result, maxBytes, startedAt)
-    if (result.sessionStatus.kind === 'running') {
-      output.session_id = allocateSession(agent, { kind: 'terminal', owner: agent, id: spawned.sessionId })
-    } else {
-      await terminals.kill(agent, spawned.sessionId, 'Codex command exited')
-    }
-    return output
   }
 
   const policy = ctx.get('sandboxPolicy')?.resolve(exec.agent === undefined ? {} : { session: exec.agent.session })
@@ -238,32 +262,37 @@ export async function runExecCommand(
     login: args.login ?? true,
     ...workdir === undefined ? {} : { workdir },
     stdoutMaxBytes: maxBytes,
+    signal: exec.signal,
     ...dshEnv === undefined ? {} : { dshEnv },
     ...policy === undefined ? {} : { sandboxPolicy: policy },
   }
   const process = ctx.shell.start(ctx.shell.resolve(shellRequest))
-  const completed = await waitForShell(process, waitMs(args.yield_time_ms, config.defaultYieldTimeMs), exec.signal)
-  const output = readShellOutput(process.readOutput(), maxBytes)
-  if (!completed || process.status === 'running') {
-    if (exec.agent === undefined) {
-      process.kill()
-      await process.done
+  try {
+    await waitForShell(process, normalizeWaitMs(args.yield_time_ms, config.defaultYieldTimeMs), exec.signal)
+    const output = readShellOutput(process.readOutput(), maxBytes)
+    if (process.status === 'running') {
+      if (exec.agent === undefined) {
+        process.kill()
+        await process.done
+        return withChunkId({
+          wall_time_seconds: (performance.now() - startedAt) / 1000,
+          output: readShellOutput(process.readOutput(), maxBytes),
+        })
+      }
       return withChunkId({
         wall_time_seconds: (performance.now() - startedAt) / 1000,
-        output: readShellOutput(process.readOutput(), maxBytes),
+        output,
+        session_id: allocateSession(exec.agent, { kind: 'shell', process }),
       })
     }
     return withChunkId({
       wall_time_seconds: (performance.now() - startedAt) / 1000,
       output,
-      session_id: allocateSession(exec.agent, { kind: 'shell', process }),
+      ...process.exitCode === null ? {} : { exit_code: process.exitCode },
     })
+  } finally {
+    await stopShellOnAbort(process, exec.signal)
   }
-  return withChunkId({
-    wall_time_seconds: (performance.now() - startedAt) / 1000,
-    output,
-    ...process.exitCode === null ? {} : { exit_code: process.exitCode },
-  })
 }
 
 /** Poll or write to one session returned by {@link runExecCommand}. */
@@ -287,21 +316,31 @@ export async function runWriteStdin(
     if (chars.length > 0) {
       throw new Error('this unified exec session uses pipes and does not accept stdin; rerun exec_command with tty=true')
     }
-    const completed = await waitForShell(session.process, waitMs(args.yield_time_ms, config.pollYieldTimeMs), exec.signal)
-    const output = readShellOutput(session.process.readOutput(), maxBytes)
-    if (completed && session.process.status !== 'running') {
-      forgetSession(agent, args.session_id)
+    try {
+      await waitForShell(session.process, normalizeWaitMs(args.yield_time_ms, config.pollYieldTimeMs, true), exec.signal)
+      const output = readShellOutput(session.process.readOutput(), maxBytes)
+      if (session.process.status !== 'running') {
+        forgetSession(agent, args.session_id)
+        return withChunkId({
+          wall_time_seconds: (performance.now() - startedAt) / 1000,
+          output,
+          ...session.process.exitCode === null ? {} : { exit_code: session.process.exitCode },
+        })
+      }
       return withChunkId({
         wall_time_seconds: (performance.now() - startedAt) / 1000,
         output,
-        ...session.process.exitCode === null ? {} : { exit_code: session.process.exitCode },
+        session_id: args.session_id,
       })
+    } finally {
+      if (exec.signal.aborted) {
+        try {
+          await stopShellOnAbort(session.process, exec.signal)
+        } finally {
+          forgetSession(agent, args.session_id)
+        }
+      }
     }
-    return withChunkId({
-      wall_time_seconds: (performance.now() - startedAt) / 1000,
-      output,
-      session_id: args.session_id,
-    })
   }
 
   const terminals = ctx.get('terminals')
@@ -309,17 +348,34 @@ export async function runWriteStdin(
   const sendRequest: CodexTerminalSendRequest = {
     text: chars,
     submit: false,
-    waitMs: waitMs(args.yield_time_ms, chars.length > 0 ? config.writeYieldTimeMs : config.pollYieldTimeMs),
+    waitMs: normalizeWaitMs(
+      args.yield_time_ms,
+      chars.length > 0 ? config.writeYieldTimeMs : config.pollYieldTimeMs,
+      chars.length === 0,
+    ),
     signal: exec.signal,
   }
-  const operation = terminals.startSend(agent, session.id, sendRequest)
-  const result = await operation.done
-  const output = terminalResult(result, maxBytes, startedAt)
-  if (result.sessionStatus.kind === 'running') {
-    output.session_id = args.session_id
-  } else {
-    forgetSession(agent, args.session_id)
-    await terminals.kill(agent, session.id, 'Codex command exited')
+  let retained = false
+  let closeReason = 'Codex command failed'
+  try {
+    const operation = terminals.startSend(agent, session.id, sendRequest)
+    const result = await operation.done
+    const output = terminalResult(result, maxBytes, startedAt)
+    if (result.sessionStatus.kind === 'running') {
+      output.session_id = args.session_id
+      retained = true
+    } else {
+      closeReason = 'Codex command exited'
+      forgetSession(agent, args.session_id)
+    }
+    return output
+  } finally {
+    // A failed send must not strand either side of the two-level session
+    // registry: the local numeric id and the underlying PTY must be retired
+    // together. A successful running result is the only retained case.
+    if (!retained) {
+      forgetSession(agent, args.session_id)
+      await terminals.kill(agent, session.id, closeReason)
+    }
   }
-  return output
 }
