@@ -22,6 +22,7 @@ import type { PatchFile } from './patch.ts'
 import { renderExecResult, runExecCommand, runWriteStdin } from './exec.ts'
 import type { ExecCommandArgs, ExecResult, WriteStdinArgs } from './exec.ts'
 import { hostedWebSearchStream, installHostedWebSearch, remoteCompactStream } from './remote.ts'
+import { registerCodexActivityProjection } from './activity.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface LlmCallConfig {
@@ -601,6 +602,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // provider routes. Codex adds only scoped transport behavior and capability
   // metadata; failed remote operations continue through the generic path.
   watchConfiguredGptModels(ctx)
+  registerCodexActivityProjection(ctx)
   const codexSettings = installCodexSettings(ctx)
   // Keep these controls in the request config rather than mutating provider
   // settings. That makes a change apply to the next step without rebuilding

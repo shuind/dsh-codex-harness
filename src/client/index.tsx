@@ -1,5 +1,6 @@
 /** Browser controls for the Codex request settings mounted by the Host plugin. */
 
+import { useEffect, useState } from 'react'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
@@ -9,6 +10,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { CODEX_CONTEXT_MAX, CODEX_CONTEXT_UNIT, CODEX_PRESET_ID } from '../context.ts'
+import type { CodexActivity } from '../activity-types.ts'
 
 const NS = 'codex' as const
 const SETTINGS_NAMESPACE = 'codex'
@@ -29,6 +31,8 @@ const en = {
   contextSize: 'Context size',
   contextSizeDescription: 'Next request capacity in K tokens. The meter above is current.',
   contextRestore: 'Restore model default',
+  activityCompacting: 'Compacting context...',
+  activityAwaitingModel: 'Waiting for model response...',
 } as const
 
 const zh = {
@@ -40,6 +44,8 @@ const zh = {
   contextSize: '上下文大小',
   contextSizeDescription: '设置下次请求的上下文容量，单位为 K tokens；上方是当前请求。',
   contextRestore: '恢复模型默认值',
+  activityCompacting: '正在压缩上下文...',
+  activityAwaitingModel: '正在等待模型响应...',
 } as const
 
 type CodexKey = keyof typeof en
@@ -196,6 +202,68 @@ function ContextSizeControl({ contextWindow, useSettings, setSetting, unsetSetti
   )
 }
 
+type ActivityProps = PropsRuntime<'conversation.input.dock'>
+  & PropsLocale<'codex'>
+
+type CodexActivityReader = (key: 'codexActivity') => CodexActivity | null | undefined
+
+function elapsedSeconds(startedAt: number, now: number): number {
+  return Math.max(0, Math.floor((now - startedAt) / 1_000))
+}
+
+export function ActivityLine({ sessionId, useSessions, useProjection, t }: ActivityProps) {
+  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
+  // Keep the projection seam optional: this package must still load when the
+  // host has no session-projection registry or has not carried this key.
+  const activity = (useProjection as unknown as CodexActivityReader)('codexActivity')
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (agentPreset !== CODEX_PRESET_ID || activity === undefined || activity === null) return undefined
+    setNow(Date.now())
+    const timer = setInterval(() => { setNow(Date.now()) }, 1_000)
+    return () => clearInterval(timer)
+  }, [agentPreset, activity?.startedAt])
+
+  if (agentPreset !== CODEX_PRESET_ID || activity === undefined || activity === null) return null
+  const label = activity.activity === 'awaiting-model'
+    ? t('activityAwaitingModel')
+    : t('activityCompacting')
+
+  return (
+    <div
+      id="codex-activity"
+      role="status"
+      aria-live="polite"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        minHeight: 28,
+        padding: '4px 10px',
+        color: 'var(--dsw-alias-label-secondary)',
+        fontSize: 12,
+        lineHeight: '20px',
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 7,
+          height: 7,
+          flex: '0 0 auto',
+          borderRadius: '50%',
+          background: 'var(--dsw-static-blue-500)',
+        }}
+      />
+      <span>{label}</span>
+      <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>
+        · {elapsedSeconds(activity.startedAt, now)}s
+      </span>
+    </div>
+  )
+}
+
 export const inject = ['slots', 'locale', 'settingsScope']
 
 /** Mount Fast inside the model selector and context size inside the meter panel. */
@@ -221,6 +289,12 @@ export function apply(ctx: Context): void {
     locale: NS,
     inject: injected,
   }, ContextSizeControl))
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock',
+    id: 'codex-activity',
+    order: 5,
+    locale: NS,
+  }, ActivityLine))
 }
 
 export default { inject, apply }

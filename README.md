@@ -10,6 +10,7 @@
 - **Fast**：仅在 Codex preset 的模型选择菜单中显示，开启后向 Responses 请求发送 `service_tier: "priority"`。
 - **远程搜索与压缩**：OpenAI Responses 请求默认优先使用 hosted `web_search` 和 `/responses/compact`；失败时回退到 DSH 的本地实现。
 - **上下文容量**：在 Web 中设置 `1K`–`1000K` tokens，设置值作用于下一次请求。
+- **活动状态**：Codex 等待模型响应或进行上下文压缩时，在输入框上方显示对应状态和耗时，让长时间 Deep Diving 不再像卡住。
 
 ## 安装
 
@@ -50,6 +51,12 @@ Fast 设置保存在 `codex` 命名空间，只对 Codex preset 生效。
 点击 Web 顶部的上下文使用量指示器，可以设置下一次请求的上下文容量。上方 meter 显示当前请求的实际容量；修改设置后，需要发送下一次请求才会更新。
 
 上下文容量使用整数 K tokens，范围为 `1K` 到 `1000K`。实际可用上限仍取决于模型和中转站支持情况。
+
+### 活动状态
+
+Codex 等待模型首个输出时，Web 输入框上方会显示 `正在等待模型响应... · Ns`；开始上下文压缩后会切换为 `正在压缩上下文... · Ns`。收到模型输出、压缩结束或下一轮开始后自动隐藏。该状态由 Host 的 `sessionProjections` 投影驱动，因此本地压缩和远程 `/responses/compact` 都会显示同一种状态。
+
+如果当前 DSH 组合没有加载 projection 服务，插件会跳过注册，客户端也会自动隐藏这行，不影响普通会话。
 
 ## 随包提供的 Codex preset
 
