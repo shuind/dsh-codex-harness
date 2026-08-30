@@ -10,7 +10,6 @@
 - 支持 Fast 请求、GPT 图片与思考强度和上下文容量。
 - 实时显示请求模型、模型回复和上下文压缩状态及耗时。
 - Responses 请求优先使用原生 `apply_patch`、hosted `web_search` 和远程压缩，失败时回退到 DSH 实现。
-- 随附 DSH 的后台任务、目标、Plan mode、子 Agent/工作流、用户询问、todo 与 Skills 组合。
 
 ## 安装
 
