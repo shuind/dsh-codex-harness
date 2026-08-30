@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   awaitingModelStartedAt, modelActivity, modelReplyStartedAt, sameModelActivity,
 } from '../src/client/activity.ts'
+import { resolveActivity as resolveVisibleActivity } from '../src/client/index.tsx'
 
 function snapshot(overrides: Partial<Parameters<typeof awaitingModelStartedAt>[0]> = {}) {
   return {
@@ -71,6 +72,12 @@ describe('Codex client activity fallback', () => {
     expect(modelReplyStartedAt(snapshot({ chat } as never))).toBe(456)
     expect(modelActivity(snapshot({ chat } as never)))
       .toEqual({ activity: 'model-reply', startedAt: 456 })
+  })
+
+  it('uses the legacy session fallback while the projection is null', () => {
+    const fallback = { activity: 'requesting-model' as const, startedAt: 123 }
+    expect(resolveVisibleActivity('codex', null, fallback)).toEqual(fallback)
+    expect(resolveVisibleActivity('standard', null, fallback)).toBeNull()
   })
 
 })

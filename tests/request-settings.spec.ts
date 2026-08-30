@@ -18,6 +18,8 @@ describe('Codex request settings', () => {
     expect(prompt).toContain(
       'For substantial work, explain what changed and why, then briefly note how the work was verified and what comes next.',
     )
+    expect(prompt).not.toContain('Track every background job id you start.')
+    expect(prompt).not.toContain('Before giving a final answer, collect every still-relevant job')
     for (const removedRule of [
       'do not wrap the patch in JSON',
       'Do not attempt to switch the preset',

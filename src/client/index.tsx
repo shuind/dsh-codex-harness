@@ -1,6 +1,6 @@
 /** Browser controls for the Codex request settings mounted by the Host plugin. */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { Context } from '@deepseek-ai/cordis'
@@ -247,12 +247,32 @@ type ActivityProps = Pick<
 >
 
 type CodexActivityReader = (key: 'codexActivity') => CodexActivity | null | undefined
+type ActivityFallback = ReturnType<typeof modelActivity>
 
 function elapsedSeconds(startedAt: number, now: number): number {
   return Math.max(0, Math.floor((now - startedAt) / 1_000))
 }
 
-export function ActivityLine({ sessionId, useSession, useSessions, useProjection, t }: ActivityProps) {
+/** Prefer the session snapshot when an older projection host only exposes null. */
+export function resolveActivity(
+  agentPreset: string | undefined,
+  projectedActivity: CodexActivity | null | undefined,
+  fallbackActivity: ActivityFallback,
+): CodexActivity | null {
+  if (!isCodexPresetId(agentPreset)) return null
+  if (projectedActivity?.activity === 'awaiting-model') {
+    return {
+      activity: fallbackActivity?.activity ?? 'requesting-model',
+      startedAt: fallbackActivity?.startedAt ?? projectedActivity.startedAt,
+    }
+  }
+  if (projectedActivity === null) return fallbackActivity ?? null
+  return projectedActivity ?? fallbackActivity ?? null
+}
+
+export function ActivityLine({
+  sessionId, useSession, useSessions, useProjection, t, position,
+}: ActivityProps & { position?: { left: number; top: number } }) {
   const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
   // Keep the projection seam optional: this package must still load when the
   // host has no session-projection registry or has not carried this key.
@@ -261,19 +281,7 @@ export function ActivityLine({ sessionId, useSession, useSessions, useProjection
   // fallback only covers the short wire gap before the next projection frame;
   // tool calls intentionally remain silent because their cards own the status.
   const fallbackActivity = useSession(modelActivity, sameModelActivity)
-  // `undefined` means the key has not arrived yet; `null` is an authoritative
-  // clear and must not be resurrected by the local snapshot fallback.
-  const normalizedProjectedActivity = projectedActivity?.activity === 'awaiting-model'
-    ? {
-        activity: fallbackActivity?.activity ?? 'requesting-model' as const,
-        startedAt: fallbackActivity?.startedAt ?? projectedActivity.startedAt,
-      }
-    : projectedActivity
-  const activity = projectedActivity !== undefined ? normalizedProjectedActivity : (
-    isCodexPresetId(agentPreset) && fallbackActivity !== undefined
-      ? fallbackActivity
-      : null
-  )
+  const activity = resolveActivity(agentPreset, projectedActivity, fallbackActivity)
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -299,12 +307,19 @@ export function ActivityLine({ sessionId, useSession, useSessions, useProjection
         alignItems: 'center',
         gap: 7,
         minHeight: 26,
-        marginLeft: 10,
+        marginLeft: position === undefined ? 10 : 0,
         color: 'var(--dsw-alias-label-secondary)',
         fontSize: 12,
         lineHeight: '20px',
         whiteSpace: 'nowrap',
         WebkitTextFillColor: 'currentColor',
+        ...(position === undefined ? {} : {
+          position: 'fixed' as const,
+          left: position.left,
+          top: position.top,
+          zIndex: 100,
+          pointerEvents: 'none' as const,
+        }),
       }}
     >
       <span
@@ -342,11 +357,52 @@ function findContextMeterDialog(): HTMLElement | null {
 }
 
 function findTurnStatus(): HTMLElement | null {
+  let fallback: HTMLElement | null = null
   for (const status of document.querySelectorAll<HTMLElement>('[role="status"]')) {
+    if (status.closest('[data-chat-flow]') === null) continue
+    fallback ??= status
     if (status.textContent?.includes('Deep diving...') === true
-      && status.closest('[data-chat-flow]') !== null) return status
+      || status.className.toString().includes('turnStatus')) return status
   }
-  return null
+  return fallback
+}
+
+function useTurnStatusPosition(target: HTMLElement | null): { left: number; top: number } | null {
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
+
+  useLayoutEffect(() => {
+    if (target === null) {
+      setPosition(null)
+      return undefined
+    }
+    const update = (): void => {
+      if (!target.isConnected) {
+        setPosition(null)
+        return
+      }
+      const rect = target.getBoundingClientRect()
+      if (rect.width === 0 && rect.height === 0) {
+        setPosition(null)
+        return
+      }
+      setPosition({
+        left: Math.round(rect.right + 10),
+        top: Math.round(rect.top + (rect.height - 26) / 2),
+      })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update)
+    observer?.observe(target)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+      observer?.disconnect()
+    }
+  }, [target])
+
+  return position
 }
 
 function useLegacyHostTargets(): {
@@ -387,6 +443,7 @@ function LegacyOverlay(props: LegacyOverlayProps) {
     sessionId, useSession, useSessions, useProjection, useSettings, setSetting, unsetSetting, t,
   } = props
   const { contextDialog, turnStatus } = useLegacyHostTargets()
+  const turnStatusPosition = useTurnStatusPosition(turnStatus)
   const contextWindow = contextWindowFromProjection(useProjection)
   const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
   if (!isCodexPresetId(agentPreset)) return null
@@ -405,15 +462,16 @@ function LegacyOverlay(props: LegacyOverlayProps) {
         contextDialog,
         'codex-context-size',
       )}
-      {turnStatus !== null && createPortal(
+      {turnStatusPosition !== null && typeof document !== 'undefined' && document.body !== null && createPortal(
         <ActivityLine
           sessionId={sessionId}
           useSession={useSession}
           useSessions={useSessions}
           useProjection={useProjection}
           t={t}
+          position={turnStatusPosition}
         />,
-        turnStatus,
+        document.body,
         'codex-activity',
       )}
     </>

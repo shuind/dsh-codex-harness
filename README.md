@@ -6,10 +6,11 @@
 
 - **精简 Codex coding-agent 提示词**：使用精简版系统提示词；身份、模型和工作目录由 `dsh-persona` 提供，避免重复的 Harness 身份说明，同时保留必要的工具契约和编码工作流。
 - **Codex 工具**：`exec_command`、`write_stdin`、`apply_patch`、`update_plan`；`apply_patch` 匹配失败时会显示文件、hunk、行号、可见空白和附近文件内容，便于修正上下文。
-- **后台任务**：`exec_command` 支持 `run_in_background: true`，立即返回 DSH `job_id`；使用 `job_output` 读取输出、`job_kill` 停止任务。任务完成时，忙碌中的 agent 会在下一步收到 inbox 注入；空闲 agent 默认保持安静，等下一次唤醒时再处理完成消息。
+- **后台任务**：`exec_command` 支持 `run_in_background: true`，立即返回 DSH `job_id`；`job_output`、`job_list`、`job_kill` 以及完成通知和对应提示词均由 `@deepseek-ai/dsh-tool-jobs` 提供，Codex 层不重复注入后台任务管理提示。随包 preset 使用官方 `wakeup` 投递策略，空闲 agent 也会自动收到完成通知。
 - **GPT 能力补全**：为 GPT 系列模型补充图片输入和思考强度选项；不会覆盖用户已有的显式配置。
 - **Fast**：仅在 Codex preset 的模型选择菜单中显示，开启后向 Responses 请求发送 `service_tier: "priority"`。
 - **Legacy Web compatibility**: The plugin uses only slots present in the legacy host. The context-size control is appended to the host context-usage popup, and the activity line is appended beside `Deep diving...`; no host upgrade is required.
+- **Official DSH capabilities**: The shipped Codex presets add the official goal, reviewed plan-mode, continuable subagent/workflow, user-question, and durable todo surfaces. Background-job guidance and completion notifications remain owned by `@deepseek-ai/dsh-tool-jobs`; the Codex layer does not duplicate that prompt.
 - **Responses 原生 apply_patch**：在 GPT Responses 请求的插件传输边界，把普通 JSON function tool 改写为 `type: "custom"` + OpenAI `lark` grammar；下一轮历史同步改写为 `custom_tool_call`。如果中转站拒绝 custom tool，则自动回退到普通 function tool，不改变 DSH 工具执行器。
 - **远程搜索与压缩**：OpenAI Responses 请求默认优先使用 hosted `web_search` 和 `/responses/compact`；失败时回退到 DSH 的本地实现。
 - **远程压缩用量**：`/responses/compact` 返回标准 `usage` 时，插件会把 `input_tokens`、缓存读写和 `output_tokens` 原样拆分为 DSH 的用量字段；不再把远程压缩伪造成 `0`。中转站缺失或返回不一致的 usage 时，插件不会编造数字。
@@ -20,7 +21,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.34
+dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.36
 ```
 
 重启 Web，创建新会话，在模式菜单中选择 **Codex 模式**。
@@ -72,7 +73,7 @@ Codex 发起模型请求时，Web 会在 `Deep diving...` 右侧显示 `请求�
 
 它们分别位于 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/codex/` 和 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/codex-collaboration/`。如果对应目录已经存在，插件会保留你的文件，不会覆盖自定义内容。
 
-在 Web 的 **Agent 预设** 中选择 **Codex 模式** 或 **Codex 协作模式**，再新建会话即可使用随包提供的 Codex 工具、网页搜索、远程压缩和 Skills 组合。两套 preset 共用 Fast、思考强度、GPT 图片输入和上下文容量设置；只有系统提示词是否包含协作指导不同。
+在 Web 的 **Agent 预设** 中选择 **Codex 模式** 或 **Codex 协作模式**，再新建会话即可使用随包提供的 Codex 工具、官方后台任务控制、目标、Plan mode、子 Agent/工作流、用户询问、todo、网页搜索、远程压缩和 Skills 组合。两套 preset 共用 Fast、思考强度、GPT 图片输入和上下文容量设置；只有系统提示词是否包含协作指导不同。
 
 ## 自定义 preset
 
@@ -96,7 +97,7 @@ Codex 发起模型请求时，Web 会在 `Deep diving...` 右侧显示 `请求�
 - id: codex-jobs
   name: '@deepseek-ai/dsh-tool-jobs'
   config:
-    completionDelivery: quiet
+    completionDelivery: wakeup
 ```
 
 再写入 `preset.yml`，让 Web 中显示更清晰的名称：
