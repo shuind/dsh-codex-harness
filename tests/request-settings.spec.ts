@@ -38,7 +38,7 @@ describe('Codex request settings', () => {
       "Ask, align, and clarify first. Gather enough context from the user, then align the approach to achieve the user's goal through the clearest, most effective path.",
     )
     expect(prompt).toContain(
-      "Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done, especially when writing documentation or communicating. Convey enough valuable information with as few words as possible.",
+      "Keep only the essential logic and core actions. Don't explain or test what was removed or why something wasn't done, especially when writing documentation or communicating. Convey enough valuable information with as few words as possible.",
     )
     expect(prompt).not.toContain('Gather more context from the user.')
     expect(prompt).not.toContain('Make things as effortless as possible for the user.')
