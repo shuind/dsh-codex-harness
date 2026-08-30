@@ -44,12 +44,6 @@ apiKeyEnv: OPENAI_API_KEY
 - **Fast**：在 Codex 模式的模型菜单中开启，向 Responses 请求发送 `service_tier: "priority"`。
 - **上下文容量**：点击输入栏旁的上下文用量指示器，可设置 `1K`–`1000K` tokens；下一次请求和自动压缩使用该值。
 
-## v0.2.0 迁移
-
-v0.2.0 将原来的两个内置模式合并为一个。安装器会升级未修改的旧 Codex 协作模式，并移除未修改的旧基础模式；检测到用户改动的 preset 会保留。
-
-preset 在创建会话时确定，已有会话不会自动切换。模型、中转站是否支持 hosted search、远程压缩、custom tools 和 priority tier，以实际服务为准。
-
 ## License
 
 MIT
