@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  apply,
   applyCodexRequestSettings,
   buildCodexSystemPrompt,
+  CODEX_SETTINGS_NAMESPACE,
   Config,
   normalizeCodexPromptAssembly,
   syncCodexContextWindow,
@@ -108,6 +110,11 @@ describe('Codex request settings', () => {
       header: { config: { provider: 'relay', model: 'gpt-5.4' } },
       reason: 'initial',
     })
+    session.append('request/context', {
+      provider: 'relay',
+      model: 'gpt-5.4',
+      contextWindow: 262_144,
+    })
 
     syncCodexContextWindow(session, 400_000)
     expect(session.requestContext()).toEqual({
@@ -118,5 +125,45 @@ describe('Codex request settings', () => {
     const eventCount = session.events.length
     syncCodexContextWindow(session, 400_000)
     expect(session.events).toHaveLength(eventCount)
+  })
+
+  it('refreshes an open session when the resolved Codex setting changes', () => {
+    const session = Session.create(SessionId('codex-context-setting-update'))
+    session.append('turn/start', { turn: 1 })
+    session.append('request/header', {
+      header: { config: { provider: 'relay', model: 'gpt-5.4' } },
+      reason: 'initial',
+    })
+    session.append('request/context', {
+      provider: 'relay',
+      model: 'gpt-5.4',
+      contextWindow: 262_144,
+    })
+
+    const listeners = new Map<string, Array<(...args: any[]) => void>>()
+    const ctx = {
+      fs: { sandboxMode: undefined },
+      get: (name: string) => name === 'sessions' ? { list: () => [session] } : undefined,
+      on: (name: string, listener: (...args: any[]) => void) => {
+        const entries = listeners.get(name) ?? []
+        entries.push(listener)
+        listeners.set(name, entries)
+        return () => {}
+      },
+      inject: () => {},
+      systemPrompt: { section: () => {} },
+      tools: { register: () => {} },
+    } as never
+
+    apply(ctx)
+    for (const listener of listeners.get('settings/updated') ?? []) {
+      listener(CODEX_SETTINGS_NAMESPACE, { fast: false, contextWindow: 400_000 })
+    }
+
+    expect(session.requestContext()).toEqual({
+      provider: 'relay',
+      model: 'gpt-5.4',
+      contextWindow: 400_000,
+    })
   })
 })

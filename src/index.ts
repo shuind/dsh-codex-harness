@@ -248,15 +248,27 @@ export function syncCodexContextWindow(session: Session, contextWindow: number |
 
 /** Keep the official context meter synchronized with a live Codex override. */
 function installCodexContextProjection(ctx: Context, current: () => CodexSettings): void {
-  const sync = (session: Session): void => {
-    syncCodexContextWindow(session, current().contextWindow)
+  const sync = (session: Session, contextWindow = current().contextWindow): void => {
+    syncCodexContextWindow(session, contextWindow)
   }
-  const syncAll = (): void => {
+  const syncAll = (contextWindow = current().contextWindow): void => {
     const sessions = ctx.get('sessions') as { list?: () => readonly Session[] } | undefined
-    for (const session of sessions?.list?.() ?? []) sync(session)
+    for (const session of sessions?.list?.() ?? []) sync(session, contextWindow)
   }
   ctx.on('session/event', (session, event) => {
     if (event.type === 'request/header' || event.type === 'request/context') sync(session)
+  })
+  // Restored sessions may already contain their request/header seed, so no
+  // session/event is emitted for the initial capacity. Catch them at the
+  // store publication boundary as well.
+  ctx.on('session/created', (session) => { sync(session) })
+  // Use the resolved value carried by the consumer-facing event. This avoids
+  // waiting for the settings source closure to refresh before synchronizing
+  // already-open sessions.
+  ctx.on('settings/updated', (ns, next) => {
+    if (ns === CODEX_SETTINGS_NAMESPACE) {
+      syncAll((next as CodexSettings).contextWindow)
+    }
   })
   ctx.on('settings/document-updated', ns => {
     if (ns === CODEX_SETTINGS_NAMESPACE) syncAll()
