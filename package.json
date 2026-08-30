@@ -1,6 +1,6 @@
 {
   "name": "@shuind/dsh-codex-harness",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Codex coding preset with customizable prompts and tools for DSH.",
   "type": "module",
   "main": "lib/index.js",

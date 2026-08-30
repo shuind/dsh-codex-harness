@@ -14,7 +14,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add @shuind/dsh-codex-harness@0.2.0
+dsh plugin --profile web add @shuind/dsh-codex-harness@0.2.1
 ```
 
 重启 Web，在 **Agent 预设** 中选择 **Codex 模式**，再创建会话。
