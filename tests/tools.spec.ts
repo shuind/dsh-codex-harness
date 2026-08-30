@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
+import type { JobHooks, JobId, JobStart } from '@deepseek-ai/dsh-jobs'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess } from '@deepseek-ai/dsh-shell'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { apply, enrichCodexModel } from '../src/index.ts'
 import { normalizeWaitMs, runExecCommand, runWriteStdin } from '../src/exec.ts'
 import {
+  addCodexApplyPatch,
   addHostedWebSearch,
   hostedWebSearchStream,
   installHostedWebSearch,
   remoteCompactStream,
+  rewriteCodexApplyPatchHistory,
+  rewriteCodexResponsesBody,
   replaceRemoteCompactions,
 } from '../src/remote.ts'
 
@@ -34,7 +38,8 @@ describe('Codex tool catalog', () => {
   it('normalizes unified exec wait times to Codex polling bounds', () => {
     expect(normalizeWaitMs(0, 0)).toBe(250)
     expect(normalizeWaitMs(100, 10_000)).toBe(250)
-    expect(normalizeWaitMs(31_000, 0)).toBe(30_000)
+    expect(normalizeWaitMs(0, 0, false, true)).toBe(process.platform === 'win32' ? 10_000 : 250)
+    expect(normalizeWaitMs(31_000, 0, false, true)).toBe(30_000)
     expect(normalizeWaitMs(0, 0, true)).toBe(5_000)
     expect(normalizeWaitMs(400_000, 0, true)).toBe(300_000)
   })
@@ -43,18 +48,18 @@ describe('Codex tool catalog', () => {
     const controller = new AbortController()
     let resolved: ShellExecRequest | undefined
     let started: ShellExecSpec | undefined
-    let resolveDone!: () => void
     let kills = 0
     const shellProcess: ShellProcess = {
       status: 'running',
       exitCode: null,
       signal: null,
-      done: new Promise<void>(resolve => { resolveDone = resolve }),
+      // Resolve the initial wait immediately so this cancellation test does not
+      // spend the native Windows 10-second initial-yield floor in real time.
+      done: Promise.resolve(),
       readOutput: () => ({ delta: '', lossy: false }),
       kill: () => {
         kills++
         shellProcess.status = 'killed'
-        resolveDone()
         return true
       },
     }
@@ -88,10 +93,10 @@ describe('Codex tool catalog', () => {
     expect(shellProcess.status).toBe('killed')
   })
 
-  it('kills a pipe-backed exec session when a later write_stdin call is cancelled', async () => {
-    const startSignal = new AbortController().signal
-    const stopController = new AbortController()
+  it('detaches a pipe-backed command into the DSH job registry', async () => {
+    const controller = new AbortController()
     const agent = { session: { header: {} } } as unknown as ToolRunContext['agent']
+    let resolved: ShellExecRequest | undefined
     let resolveDone!: () => void
     let kills = 0
     const shellProcess: ShellProcess = {
@@ -99,11 +104,119 @@ describe('Codex tool catalog', () => {
       exitCode: null,
       signal: null,
       done: new Promise<void>(resolve => { resolveDone = resolve }),
-      readOutput: () => ({ delta: '', lossy: false }),
+      readOutput: () => ({ delta: 'background output\n', lossy: false }),
       kill: () => {
         kills++
         shellProcess.status = 'killed'
         resolveDone()
+        return true
+      },
+    }
+    let specSeen: JobStart | undefined
+    let hooks: JobHooks | undefined
+    const jobs = {
+      start: (spec: JobStart): JobId => {
+        specSeen = spec
+        hooks = spec.run()
+        return 'bash-1' as JobId
+      },
+    }
+    const ctx = {
+      shell: {
+        resolve: (request: ShellExecRequest): ShellExecSpec => {
+          resolved = request
+          return request as unknown as ShellExecSpec
+        },
+        start: (): ShellProcess => shellProcess,
+      },
+      get: (name: string) => name === 'jobs' ? jobs : undefined,
+    } as unknown as Context
+
+    const result = await runExecCommand(ctx, {
+      cmd: 'long-running command',
+      run_in_background: true,
+      max_output_tokens: 128,
+    }, {
+      agent,
+      signal: controller.signal,
+    } as unknown as ToolRunContext, {
+      defaultYieldTimeMs: 10_000,
+      maxOutputBytes: 1024,
+    })
+
+    expect(result.job_id).toBe('bash-1')
+    expect(result.output).toContain('Use job_output with job_id "bash-1"')
+    expect(specSeen).toMatchObject({ kind: 'bash', label: 'long-running command', owner: agent, outputLimitBytes: 512 })
+    expect(resolved?.signal).toBeUndefined()
+    expect(hooks).toBeDefined()
+
+    // The tool-call signal is no longer the job's lifetime after detachment.
+    controller.abort()
+    expect(kills).toBe(0)
+
+    shellProcess.status = 'completed'
+    shellProcess.exitCode = 0
+    resolveDone()
+    await expect(hooks!.done).resolves.toEqual({ status: 'completed', detail: 'exit code: 0' })
+  })
+
+  it('does not spawn a background command without a jobs capability', async () => {
+    const agent = { session: { header: {} } } as unknown as ToolRunContext['agent']
+    let starts = 0
+    const ctx = {
+      shell: {
+        resolve: (request: ShellExecRequest): ShellExecSpec => request as unknown as ShellExecSpec,
+        start: (): ShellProcess => {
+          starts++
+          throw new Error('unexpected process start')
+        },
+      },
+      get: () => undefined,
+    } as unknown as Context
+
+    await expect(runExecCommand(ctx, { cmd: 'long-running command', run_in_background: true }, {
+      agent,
+      signal: new AbortController().signal,
+    } as unknown as ToolRunContext, {
+      defaultYieldTimeMs: 10_000,
+      maxOutputBytes: 1024,
+    })).rejects.toThrow('background jobs unavailable')
+    expect(starts).toBe(0)
+  })
+
+  it('rejects background PTY requests instead of silently changing execution mode', async () => {
+    const agent = { session: { header: {} } } as unknown as ToolRunContext['agent']
+    const ctx = { get: () => undefined } as unknown as Context
+
+    await expect(runExecCommand(ctx, {
+      cmd: 'long-running command',
+      tty: true,
+      run_in_background: true,
+    }, {
+      agent,
+      signal: new AbortController().signal,
+    } as unknown as ToolRunContext, {
+      defaultYieldTimeMs: 10_000,
+      maxOutputBytes: 1024,
+    })).rejects.toThrow('only supported for pipe-backed commands')
+  })
+
+  it('kills a pipe-backed exec session when a later write_stdin call is cancelled', async () => {
+    const startSignal = new AbortController().signal
+    const stopController = new AbortController()
+    const agent = { session: { header: {} } } as unknown as ToolRunContext['agent']
+    let kills = 0
+    const shellProcess: ShellProcess = {
+      status: 'running',
+      exitCode: null,
+      signal: null,
+      // Resolve the initial wait immediately; the later poll remains pending
+      // until cancellation invokes kill().
+      done: Promise.resolve(),
+      readOutput: () => ({ delta: '', lossy: false }),
+      kill: () => {
+        kills++
+        shellProcess.status = 'killed'
         return true
       },
     }
@@ -322,6 +435,81 @@ describe('Codex tool catalog', () => {
     ])
   })
 
+  it('emits apply_patch as a Responses custom tool with the Codex Lark grammar', () => {
+    const body = addCodexApplyPatch({
+      model: 'gpt-5.4',
+      tools: [{
+        type: 'function',
+        name: 'apply_patch',
+        description: 'patch files',
+        parameters: { type: 'object' },
+      }, {
+        type: 'function',
+        name: 'exec_command',
+      }],
+    })
+    expect(body.tools).toEqual([{
+      type: 'custom',
+      name: 'apply_patch',
+      description: 'patch files',
+      format: expect.objectContaining({
+        type: 'grammar',
+        syntax: 'lark',
+        definition: expect.stringContaining('start: begin_patch hunk+ end_patch'),
+      }),
+    }, {
+      type: 'function',
+      name: 'exec_command',
+    }])
+  })
+
+  it('replays generic apply_patch history as Responses custom tool items', () => {
+    const patch = '*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch'
+    expect(rewriteCodexApplyPatchHistory({
+      input: [
+        {
+          type: 'function_call',
+          id: 'fc-1',
+          call_id: 'call-1',
+          name: 'apply_patch',
+          arguments: JSON.stringify({ input: patch }),
+        },
+        { type: 'function_call_output', call_id: 'call-1', output: 'ok' },
+      ],
+    })).toEqual({
+      input: [
+        {
+          type: 'custom_tool_call',
+          id: 'fc-1',
+          call_id: 'call-1',
+          name: 'apply_patch',
+          input: patch,
+        },
+        { type: 'custom_tool_call_output', call_id: 'call-1', output: 'ok' },
+      ],
+    })
+  })
+
+  it('composes hosted search, compaction, and apply_patch rewrites at one wire boundary', () => {
+    const body = rewriteCodexResponsesBody({
+      model: 'gpt-5.4',
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '<codex-remote-compaction>opaque</codex-remote-compaction>' }],
+      }],
+      tools: [
+        { type: 'function', name: 'web_search' },
+        { type: 'function', name: 'apply_patch', description: 'patch files', parameters: {} },
+      ],
+    })
+    expect(body.tools).toEqual([
+      { type: 'custom', name: 'apply_patch', description: 'patch files', format: expect.any(Object) },
+      { type: 'web_search', external_web_access: true },
+    ])
+    expect(body.input).toEqual([{ type: 'compaction', encrypted_content: 'opaque' }])
+  })
+
   it('restores a remote compaction item at the final Responses wire boundary', () => {
     expect(replaceRemoteCompactions({
       input: [{
@@ -396,7 +584,7 @@ describe('Codex tool catalog', () => {
     expect(requests).toEqual([{ model: 'gpt-5.4', tools: [{ type: 'function', name: 'web_search' }] }])
   })
 
-  it('leaves GPT requests without web_search untouched', async () => {
+  it('leaves GPT requests without Codex-managed tools untouched', async () => {
     const originalFetch = globalThis.fetch
     const requests: object[] = []
     globalThis.fetch = async (input, init) => {
@@ -410,7 +598,7 @@ describe('Codex tool catalog', () => {
         yield* hostedWebSearchStream(async function* () {
           await globalThis.fetch('https://relay.example/v1/responses', {
             method: 'POST',
-            body: JSON.stringify({ model: 'gpt-5.4', tools: [{ type: 'function', name: 'apply_patch' }] }),
+            body: JSON.stringify({ model: 'gpt-5.4', tools: [{ type: 'function', name: 'exec_command' }] }),
           })
         })
       })().next()
@@ -418,7 +606,125 @@ describe('Codex tool catalog', () => {
       dispose()
       globalThis.fetch = originalFetch
     }
-    expect(requests).toEqual([{ model: 'gpt-5.4', tools: [{ type: 'function', name: 'apply_patch' }] }])
+    expect(requests).toEqual([{ model: 'gpt-5.4', tools: [{ type: 'function', name: 'exec_command' }] }])
+  })
+
+  it('forwards Fast service tier through the official Responses adapter boundary', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: object[] = []
+    globalThis.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      requests.push(JSON.parse(await request.text()))
+      return Response.json({ ok: true })
+    }
+    const dispose = installHostedWebSearch()
+    try {
+      await (async function* () {
+        yield* hostedWebSearchStream(async function* () {
+          await globalThis.fetch('https://relay.example/v1/responses', {
+            method: 'POST',
+            body: JSON.stringify({
+              model: 'gpt-5.4',
+              tools: [{ type: 'function', name: 'exec_command' }],
+            }),
+          })
+        }, { serviceTier: 'priority' })
+      })().next()
+    } finally {
+      dispose()
+      globalThis.fetch = originalFetch
+    }
+    expect(requests).toEqual([{
+      model: 'gpt-5.4',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      service_tier: 'priority',
+    }])
+  })
+
+  it('rewrites apply_patch at the Responses wire boundary and preserves its raw input', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: object[] = []
+    const patch = '*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch'
+    globalThis.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      requests.push(JSON.parse(await request.text()))
+      return Response.json({ ok: true })
+    }
+    const dispose = installHostedWebSearch()
+    try {
+      await (async function* () {
+        yield* hostedWebSearchStream(async function* () {
+          await globalThis.fetch('https://relay.example/v1/responses', {
+            method: 'POST',
+            body: JSON.stringify({
+              model: 'gpt-5.4',
+              tools: [{ type: 'function', name: 'apply_patch', description: 'patch files', parameters: {} }],
+              input: [
+                {
+                  type: 'function_call',
+                  call_id: 'call-1',
+                  name: 'apply_patch',
+                  arguments: JSON.stringify({ input: patch }),
+                },
+                { type: 'function_call_output', call_id: 'call-1', output: 'ok' },
+              ],
+            }),
+          })
+        })
+      })().next()
+    } finally {
+      dispose()
+      globalThis.fetch = originalFetch
+    }
+    expect(requests).toEqual([{
+      model: 'gpt-5.4',
+      tools: [{
+        type: 'custom',
+        name: 'apply_patch',
+        description: 'patch files',
+        format: expect.objectContaining({ type: 'grammar', syntax: 'lark' }),
+      }],
+      input: [
+        { type: 'custom_tool_call', call_id: 'call-1', name: 'apply_patch', input: patch },
+        { type: 'custom_tool_call_output', call_id: 'call-1', output: 'ok' },
+      ],
+    }])
+  })
+
+  it('falls back to the untouched apply_patch request when custom tools are rejected', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: object[] = []
+    let calls = 0
+    globalThis.fetch = async (input, init) => {
+      calls += 1
+      const request = new Request(input, init)
+      const body = JSON.parse(await request.text())
+      if (calls === 1) return new Response('custom tools unsupported', { status: 400 })
+      requests.push(body)
+      return Response.json({ ok: true })
+    }
+    const dispose = installHostedWebSearch()
+    try {
+      await (async function* () {
+        yield* hostedWebSearchStream(async function* () {
+          await globalThis.fetch('https://relay.example/v1/responses', {
+            method: 'POST',
+            body: JSON.stringify({
+              model: 'gpt-5.4',
+              tools: [{ type: 'function', name: 'apply_patch', description: 'patch files', parameters: {} }],
+            }),
+          })
+        })
+      })().next()
+    } finally {
+      dispose()
+      globalThis.fetch = originalFetch
+    }
+    expect(calls).toBe(2)
+    expect(requests).toEqual([{
+      model: 'gpt-5.4',
+      tools: [{ type: 'function', name: 'apply_patch', description: 'patch files', parameters: {} }],
+    }])
   })
 
   it('restores a compaction marker even when the request has no web_search tool', async () => {
@@ -511,7 +817,16 @@ describe('Codex tool catalog', () => {
       const request = new Request(input, init)
       requestUrl = request.url
       requestBody = JSON.parse(await request.text()) as Record<string, unknown>
-      return Response.json({ output: [{ type: 'compaction', encrypted_content: 'opaque' }] })
+      return Response.json({
+        output: [{ type: 'compaction', encrypted_content: 'opaque' }],
+        usage: {
+          input_tokens: 283,
+          input_tokens_details: { cached_tokens: 256, cache_write_tokens: 7 },
+          output_tokens: 69,
+          output_tokens_details: { reasoning_tokens: 24 },
+          total_tokens: 352,
+        },
+      })
     }
     const ctx = {
       get: (name: string) => name === 'settings'
@@ -538,6 +853,57 @@ describe('Codex tool catalog', () => {
     expect(requestUrl).toBe('https://relay.example/v1/responses/compact')
     expect(requestBody).toMatchObject({ model: 'gpt-5.4', input: [{ role: 'user' }] })
     expect(chunks).toContainEqual(expect.objectContaining({ type: 'text-delta', text: '<codex-remote-compaction>opaque</codex-remote-compaction>' }))
+    expect(chunks).toContainEqual({
+      type: 'usage',
+      usage: { inputTokens: 20, outputTokens: 69, cacheReadTokens: 256, cacheWriteTokens: 7 },
+    })
+    expect(chunks).not.toContainEqual({ type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } })
+  })
+
+  it('does not fabricate zero usage when compact usage is missing or inconsistent', async () => {
+    const originalFetch = globalThis.fetch
+    const responses = [
+      { output: [{ type: 'compaction', encrypted_content: 'missing' }] },
+      {
+        output: [{ type: 'compaction', encrypted_content: 'inconsistent' }],
+        usage: {
+          input_tokens: 10,
+          input_tokens_details: { cached_tokens: 8, cache_write_tokens: 5 },
+          output_tokens: 2,
+        },
+      },
+    ]
+    let responseIndex = 0
+    globalThis.fetch = async () => Response.json(responses[responseIndex++] ?? responses[0])
+    const ctx = {
+      get: (name: string) => name === 'settings'
+        ? { get: () => ({ providers: { relay: { api: 'openai-responses', baseURL: 'https://relay.example/v1', apiKeyEnv: 'RELAY_KEY' } } }) }
+        : { resolve: async () => ({ value: 'secret' }) },
+      logger: { warn: () => {} },
+    } as unknown as Context
+    try {
+      for (const expectedText of ['missing', 'inconsistent']) {
+        const chunks: unknown[] = []
+        for await (const chunk of remoteCompactStream(ctx, {
+          provider: 'relay',
+          model: 'gpt-5.4',
+          messages: [
+            { role: 'user', content: [{ type: 'text', text: 'history' }] },
+            { role: 'user', content: [{ type: 'text', text: 'compact now' }] },
+          ],
+          purpose: 'compaction',
+        } as never, async function* () { yield { type: 'finish', reason: { kind: 'stop' } } as never })) {
+          chunks.push(chunk)
+        }
+        expect(chunks).toContainEqual(expect.objectContaining({
+          type: 'text-delta',
+          text: `<codex-remote-compaction>${expectedText}</codex-remote-compaction>`,
+        }))
+        expect(chunks.some(chunk => (chunk as { type?: unknown }).type === 'usage')).toBe(false)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('adds image and reasoning defaults only to GPT models', () => {
@@ -615,9 +981,9 @@ describe('Codex tool catalog', () => {
     ])
     expect(promptSections).toEqual(['codex:base'])
     expect(definitions.map(definition => definition.description)).toEqual([
-      'Runs a command in a PTY, returning output or a session ID for ongoing interaction.',
+      'Runs a command in a PTY, returning output, a session ID for ongoing interaction, or a background job ID when requested.',
       'Writes characters to an existing unified exec session and returns recent output.',
-      'The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.',
+      'Edits files using Codex patch syntax with Begin/End Patch markers and file update directives. In hunk lines, the first character is the operation marker; repeat a source-leading marker when the source line itself starts with one.',
       'Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.',
     ])
   })
@@ -632,6 +998,7 @@ describe('Codex tool catalog', () => {
         cmd: { type: 'string', description: 'Shell command to execute.' },
         workdir: { type: 'string', description: 'Working directory for the command. Defaults to the turn cwd.' },
         tty: { type: 'boolean', description: 'True allocates a PTY for the command; false or omitted uses plain pipes.' },
+        run_in_background: { type: 'boolean', description: 'Run as a DSH background job and return its job id immediately; collect output with job_output and stop it with job_kill. Only supported for pipe-backed commands.' },
         yield_time_ms: { type: 'number', description: 'Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.' },
         max_output_tokens: { type: 'number', description: 'Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.' },
         shell: { type: 'string', description: "Shell binary to launch. Defaults to the user's default shell." },
@@ -647,6 +1014,7 @@ describe('Codex tool catalog', () => {
         wall_time_seconds: { type: 'number' },
         exit_code: { type: 'number' },
         session_id: { type: 'number' },
+        job_id: { type: 'string' },
         original_token_count: { type: 'number' },
         output: { type: 'string' },
       },
@@ -713,6 +1081,20 @@ describe('Codex tool catalog', () => {
     const expected = 'Chunk ID: abc123\nWall time: 1.2500 seconds\nProcess exited with code 0\nOutput:\ndone\n'
     expect(exec.output.render({}, value as never)).toEqual([{ type: 'text', text: expected }])
     expect(stdin.output.render({}, value as never)).toEqual([{ type: 'text', text: expected }])
+  })
+
+  it('renders a background job id in the unified exec result', () => {
+    const { definitions } = mount()
+    const exec = definitions.find(definition => definition.name === 'exec_command')!
+    const value = {
+      wall_time_seconds: 0.01,
+      job_id: 'bash-1',
+      output: 'Started background job bash-1.',
+    }
+    expect(exec.output.render({}, value as never)).toEqual([{
+      type: 'text',
+      text: 'Wall time: 0.0100 seconds\nBackground job ID: bash-1\nOutput:\nStarted background job bash-1.',
+    }])
   })
 
   it('writes update_plan state to the session event stream', async () => {

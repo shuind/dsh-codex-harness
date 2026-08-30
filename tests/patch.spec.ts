@@ -18,13 +18,9 @@ describe('Codex apply_patch language', () => {
       .toEqual([{ kind: 'update', path: 'old.txt', moveTo: 'new.txt', hunks: [] }])
   })
 
-  it('accepts the optional environment preamble and Codex lenient heredoc wrapper', () => {
-    expect(parsePatch("<<'EOF'\n*** Begin Patch\n*** Environment ID: remote\n*** Add File: new.txt\n+one\n*** End Patch\nEOF\n"))
-      .toEqual([{ kind: 'add', path: 'new.txt', content: 'one\n' }])
-    expect(() => parsePatch('*** Begin Patch\n*** Environment ID:   \n*** Add File: new.txt\n+one\n*** End Patch'))
-      .toThrow('environment id cannot be empty')
-    expect(() => parsePatch('*** Begin Patch\n*** Environment ID: first\n*** Environment ID: second\n*** Add File: new.txt\n+one\n*** End Patch'))
-      .toThrow('environment id cannot be specified more than once')
+  it('rejects native multi-environment preambles instead of silently using the primary workspace', () => {
+    expect(() => parsePatch("<<'EOF'\n*** Begin Patch\n*** Environment ID: remote\n*** Add File: new.txt\n+one\n*** End Patch\nEOF\n"))
+      .toThrow('environment selection is unavailable in this single-environment DSH plugin')
   })
 
   it('normalizes CRLF input and honors the end-of-file marker', () => {
@@ -44,12 +40,34 @@ describe('Codex apply_patch language', () => {
       .toThrow('invalid update hunk marker')
     const [file] = parsePatch('*** Begin Patch\n*** Update File: file.txt\n@@\n-missing\n+new\n*** End Patch')
     if (file?.kind !== 'update') throw new Error('expected an update patch')
-    expect(() => applyPatchHunks('actual\n', file.hunks)).toThrow('could not find expected lines')
+    expect(() => applyPatchHunks('actual\n', file.hunks, 'src/index.ts')).toThrow(
+      'could not find expected lines in src/index.ts hunk 1 (search starts at line 1)\n'
+      + 'Expected:\n'
+      + '  1: missing\n'
+      + 'File excerpt:\n'
+      + '  1: actual',
+    )
+  })
+
+  it('explains patch-marker collisions and makes whitespace visible', () => {
+    expect(() => applyPatchHunks('- item\n', [{
+      lines: [{ kind: 'delete', text: ' item' }],
+      endOfFile: false,
+    }], 'README.md')).toThrow(
+      'Hint: if a source line starts with a patch marker, repeat that marker after the operation marker; for example, `-- item` deletes the source line `- item`.',
+    )
+
+    expect(() => applyPatchHunks('  actual\n', [{
+      lines: [{ kind: 'context', text: ' missing' }],
+      endOfFile: false,
+    }], 'file.txt')).toThrow(
+      'Expected:\n  1: [space]missing\nFile excerpt:\n  1: [space][space]actual',
+    )
   })
 
   it('publishes the OpenAI custom grammar used by the freeform tool', () => {
-    expect(APPLY_PATCH_GRAMMAR).toContain('start: begin_patch environment_id? hunk+ end_patch')
-    expect(APPLY_PATCH_GRAMMAR).toContain('environment_id: "*** Environment ID: " filename LF')
+    expect(APPLY_PATCH_GRAMMAR).toContain('start: begin_patch hunk+ end_patch')
+    expect(APPLY_PATCH_GRAMMAR).not.toContain('environment_id')
     expect(APPLY_PATCH_GRAMMAR).toContain('*** Add File: ')
     expect(APPLY_PATCH_GRAMMAR).toContain('*** End of File')
     expect(APPLY_PATCH_GRAMMAR).toContain('%import common.LF')

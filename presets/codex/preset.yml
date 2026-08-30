@@ -1,3 +1,3 @@
 name: Codex 模式
-description: 使用 Codex 的基础提示词、exec_command、write_stdin、apply_patch 和 update_plan，并保留 dsh 的 Skills 与可插拔运行时。
+description: 使用精简版 Codex 提示词和工具，以及改善体验的功能。
 order: 5

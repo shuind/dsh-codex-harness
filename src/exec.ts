@@ -4,6 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { randomBytes } from 'node:crypto'
 import { resolve as resolvePath } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { JobOutcome } from '@deepseek-ai/dsh-jobs'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { ShellExecRequest, ShellProcess, ShellProcessRead } from '@deepseek-ai/dsh-shell'
 import type {
@@ -22,6 +23,7 @@ export interface ExecCommandArgs {
   cmd: string
   workdir?: string
   tty?: boolean
+  run_in_background?: boolean
   yield_time_ms?: number
   max_output_tokens?: number
   shell?: string
@@ -42,6 +44,7 @@ export interface ExecResult {
   wall_time_seconds: number
   output: string
   session_id?: number
+  job_id?: string
   exit_code?: number
   original_token_count?: number
 }
@@ -64,6 +67,7 @@ interface AgentExecState {
 
 const STATES = new WeakMap<Agent, AgentExecState>()
 const MIN_YIELD_TIME_MS = 250
+const WINDOWS_INITIAL_EXEC_YIELD_TIME_MS = 10_000
 const MIN_EMPTY_YIELD_TIME_MS = 5_000
 const MAX_YIELD_TIME_MS = 30_000
 const MAX_EMPTY_YIELD_TIME_MS = 300_000
@@ -84,8 +88,17 @@ function positiveFinite(name: string, value: number | undefined): void {
   }
 }
 
-export function normalizeWaitMs(value: number | undefined, fallback: number, empty = false): number {
-  const lower = empty ? MIN_EMPTY_YIELD_TIME_MS : MIN_YIELD_TIME_MS
+export function normalizeWaitMs(
+  value: number | undefined,
+  fallback: number,
+  empty = false,
+  initialExec = false,
+): number {
+  const lower = empty
+    ? MIN_EMPTY_YIELD_TIME_MS
+    : initialExec && process.platform === 'win32'
+      ? WINDOWS_INITIAL_EXEC_YIELD_TIME_MS
+      : MIN_YIELD_TIME_MS
   const upper = empty ? MAX_EMPTY_YIELD_TIME_MS : MAX_YIELD_TIME_MS
   return Math.max(lower, Math.min(upper, Math.trunc(value ?? fallback)))
 }
@@ -118,6 +131,7 @@ export function renderExecResult(result: ExecResult): string {
   sections.push(`Wall time: ${result.wall_time_seconds.toFixed(4)} seconds`)
   if (result.exit_code !== undefined) sections.push(`Process exited with code ${result.exit_code}`)
   if (result.session_id !== undefined) sections.push(`Process running with session ID ${result.session_id}`)
+  if (result.job_id !== undefined) sections.push(`Background job ID: ${result.job_id}`)
   if (result.original_token_count !== undefined) sections.push(`Original token count: ${result.original_token_count}`)
   sections.push('Output:', result.output)
   return sections.join('\n')
@@ -142,6 +156,17 @@ function terminalResult(result: TerminalSendResult, maxBytes: number, startedAt:
       ...result.sessionStatus.exitCode === null ? {} : { exit_code: result.sessionStatus.exitCode },
     } : {},
   })
+}
+
+/** Map a detached shell process onto the generic DSH job outcome contract. */
+function backgroundOutcome(process: ShellProcess): JobOutcome {
+  if (process.status === 'killed') {
+    return {
+      status: 'killed',
+      detail: process.signal !== null ? `signal: ${process.signal}` : 'killed before exit',
+    }
+  }
+  return { status: 'completed', detail: `exit code: ${process.exitCode ?? 0}` }
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<'elapsed' | 'aborted'> {
@@ -215,6 +240,9 @@ export async function runExecCommand(
   const maxBytes = outputLimit(config.maxOutputBytes, args.max_output_tokens)
   const workdir = sessionCwd(exec, args.workdir)
   const startedAt = performance.now()
+  if (args.run_in_background === true && args.tty === true) {
+    throw new Error('run_in_background is only supported for pipe-backed commands; omit tty')
+  }
   if (args.tty === true) {
     const agent = exec.agent
     const terminals = ctx.get('terminals')
@@ -234,7 +262,7 @@ export async function runExecCommand(
       const sendRequest: CodexTerminalSendRequest = {
         text: commandFor(args),
         submit: true,
-        waitMs: normalizeWaitMs(args.yield_time_ms, config.defaultYieldTimeMs),
+        waitMs: normalizeWaitMs(args.yield_time_ms, config.defaultYieldTimeMs, false, true),
         signal: exec.signal,
       }
       const operation = terminals.startSend(agent, spawned.sessionId, sendRequest)
@@ -256,19 +284,56 @@ export async function runExecCommand(
 
   const policy = ctx.get('sandboxPolicy')?.resolve(exec.agent === undefined ? {} : { session: exec.agent.session })
   const dshEnv = ctx.get('shellEnv')?.collect(exec)
+  // Background jobs intentionally omit the tool-call signal. Once this call
+  // returns, the job lifetime belongs to the jobs registry, not the request.
   const shellRequest: CodexShellExecRequest = {
     command: commandFor(args),
     ...args.shell === undefined ? {} : { shell: args.shell },
     login: args.login ?? true,
     ...workdir === undefined ? {} : { workdir },
     stdoutMaxBytes: maxBytes,
-    signal: exec.signal,
     ...dshEnv === undefined ? {} : { dshEnv },
     ...policy === undefined ? {} : { sandboxPolicy: policy },
   }
-  const process = ctx.shell.start(ctx.shell.resolve(shellRequest))
+
+  if (args.run_in_background === true) {
+    const owner = exec.agent
+    if (owner === undefined) throw new Error('run_in_background requires an owning agent session')
+    const jobs = ctx.get('jobs')
+    if (jobs === undefined) {
+      throw new Error('background jobs unavailable: load @deepseek-ai/dsh-jobs and @deepseek-ai/dsh-tool-jobs')
+    }
+    if (exec.signal.aborted) {
+      exec.signal.throwIfAborted()
+      throw new Error('tool call aborted')
+    }
+    const id = jobs.start({
+      kind: 'bash',
+      label: args.cmd,
+      owner,
+      outputLimitBytes: maxBytes,
+      run: () => {
+        const process = ctx.shell.start(ctx.shell.resolve(shellRequest))
+        return {
+          cancel: () => void process.kill(),
+          done: process.done.then(() => backgroundOutcome(process)),
+          readOutput: () => readShellOutput(process.readOutput(), maxBytes),
+        }
+      },
+    })
+    return withChunkId({
+      wall_time_seconds: (performance.now() - startedAt) / 1000,
+      job_id: id,
+      output: `Started background job ${id}. Use job_output with job_id "${id}" to read output.`,
+    })
+  }
+
+  const process = ctx.shell.start(ctx.shell.resolve({
+    ...shellRequest,
+    signal: exec.signal,
+  }))
   try {
-    await waitForShell(process, normalizeWaitMs(args.yield_time_ms, config.defaultYieldTimeMs), exec.signal)
+    await waitForShell(process, normalizeWaitMs(args.yield_time_ms, config.defaultYieldTimeMs, false, true), exec.signal)
     const output = readShellOutput(process.readOutput(), maxBytes)
     if (process.status === 'running') {
       if (exec.agent === undefined) {

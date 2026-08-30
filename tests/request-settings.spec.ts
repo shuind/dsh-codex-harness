@@ -1,13 +1,42 @@
 import { describe, expect, it } from 'vitest'
-import { applyCodexRequestSettings, buildCodexSystemPrompt, Config } from '../src/index.ts'
+import {
+  applyCodexRequestSettings,
+  buildCodexSystemPrompt,
+  Config,
+  normalizeCodexPromptAssembly,
+} from '../src/index.ts'
 
 describe('Codex request settings', () => {
   it('keeps the collaboration prompt off by default and enables it explicitly', () => {
     expect(Config().collaborationPrompt).toBe(false)
-    expect(buildCodexSystemPrompt()).not.toContain('## Collaboration')
+    const prompt = buildCodexSystemPrompt()
+    expect(prompt).toMatch(/^## General/)
+    expect(prompt).not.toContain('You are Codex')
+    expect(prompt).not.toContain('## Collaboration')
+    expect(prompt).toContain(
+      'For substantial work, explain what changed and why, then briefly note how the work was verified and what comes next.',
+    )
+    for (const removedRule of [
+      'do not wrap the patch in JSON',
+      'Do not attempt to switch the preset',
+      'do not invent a second harness',
+      'bypass the filesystem service',
+      'over new machinery',
+      'Do not claim that a command',
+      'do not invent replacement editing tools',
+    ]) {
+      expect(prompt).not.toContain(removedRule)
+    }
 
     expect(Config({ collaborationPrompt: true }).collaborationPrompt).toBe(true)
-    expect(buildCodexSystemPrompt({ collaborationPrompt: true })).toContain('## Collaboration')
+    const collaborationPrompt = buildCodexSystemPrompt({ collaborationPrompt: true })
+    expect(collaborationPrompt).toContain('## Collaboration')
+    expect(collaborationPrompt).toContain(
+      "Gather enough context from the user then achieve the user's goal through the clearest, most effective path.",
+    )
+    expect(collaborationPrompt).not.toContain('Ask, align, and clarify first.')
+    expect(collaborationPrompt).not.toContain('Gather more context from the user.')
+    expect(collaborationPrompt).not.toContain('Make things as effortless as possible for the user.')
   })
 
   it('maps Fast to the priority service tier and carries a context override', () => {
@@ -27,6 +56,27 @@ describe('Codex request settings', () => {
       contextWindow: 131_072,
       serviceTier: 'priority',
     })
+  })
+
+  it('puts the Codex persona first and removes the generic Harness identity', () => {
+    const result = normalizeCodexPromptAssembly({
+      sections: [
+        { name: 'harness:identity', text: 'You are an AI agent powered by DeepSeek Harness.' },
+        { name: 'harness:source', text: 'The Harness checkout is here.' },
+        { name: 'deployment:persona', text: 'You are Codex.' },
+        { name: 'codex:base', text: '## General' },
+      ],
+      contexts: [],
+      tools: [],
+      variables: {},
+    })
+
+    expect(result.sections.map(section => section.name)).toEqual([
+      'deployment:persona',
+      'harness:source',
+      'codex:base',
+    ])
+    expect(result.sections.map(section => section.text).join('\n')).not.toContain('You are an AI agent powered by DeepSeek Harness.')
   })
 
   it('clears stale Codex controls when Fast is off or the route is not GPT', () => {

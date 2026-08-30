@@ -1,7 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import type { GenerateOptions, Message, StreamChunk, ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, Message, StreamChunk, TokenUsage, ToolSchema } from '@deepseek-ai/dsh-llm'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { APPLY_PATCH_DESCRIPTION, APPLY_PATCH_GRAMMAR } from './patch.ts'
 
 export interface RemoteCodexConfig {
   hostedWebSearch: boolean
@@ -23,12 +24,27 @@ interface JsonObject {
   [key: string]: unknown
 }
 
+interface RemoteCompactResult {
+  text: string
+  usage?: TokenUsage
+}
+
 const SETTINGS_NAMESPACE = 'llm-pi-ai'
 const REMOTE_COMPACTION_OPEN = '<codex-remote-compaction>'
 const REMOTE_COMPACTION_CLOSE = '</codex-remote-compaction>'
-const HOSTED_REQUESTS = new AsyncLocalStorage<boolean>()
+interface CodexRequestWireOptions {
+  /** Provider-facing request option preserved by older DSH LLM adapters. */
+  serviceTier?: string
+}
+
+const HOSTED_REQUESTS = new AsyncLocalStorage<CodexRequestWireOptions>()
 let hostedPatchUsers = 0
 let hostedPatchRestore: (() => void) | undefined
+
+function serviceTierOf(options: GenerateOptions): string | undefined {
+  const value = (options as GenerateOptions & { serviceTier?: unknown }).serviceTier
+  return typeof value === 'string' ? value : undefined
+}
 
 function isGptModel(model: unknown): model is string {
   return typeof model === 'string' && /(?:^|\/)(?:gpt|chatgpt)(?:[-_.]|\d|$)/i.test(model)
@@ -91,6 +107,153 @@ function hasWebSearchTool(body: JsonObject): boolean {
   return Array.isArray(body.tools) && body.tools.some(isWebSearchTool)
 }
 
+function toolName(tool: unknown): string | undefined {
+  if (typeof tool !== 'object' || tool === null) return undefined
+  const value = tool as JsonObject
+  if (typeof value.name === 'string') return value.name
+  const fn = value.function
+  return typeof fn === 'object' && fn !== null && typeof (fn as JsonObject).name === 'string'
+    ? (fn as JsonObject).name as string
+    : undefined
+}
+
+function isApplyPatchTool(tool: unknown): boolean {
+  return toolName(tool) === 'apply_patch'
+}
+
+function isFunctionApplyPatchTool(tool: unknown): boolean {
+  if (!isApplyPatchTool(tool) || typeof tool !== 'object' || tool === null) return false
+  return (tool as JsonObject).type !== 'custom'
+}
+
+function hasFunctionApplyPatchTool(body: JsonObject): boolean {
+  return Array.isArray(body.tools) && body.tools.some(isFunctionApplyPatchTool)
+}
+
+function applyPatchTool(tool: unknown): JsonObject {
+  const value = tool as JsonObject
+  const fn = value.function
+  const description = typeof value.description === 'string'
+    ? value.description
+    : typeof fn === 'object' && fn !== null && typeof (fn as JsonObject).description === 'string'
+      ? (fn as JsonObject).description as string
+      : APPLY_PATCH_DESCRIPTION
+  const custom: JsonObject = {
+    type: 'custom',
+    name: 'apply_patch',
+    description,
+    format: {
+      type: 'grammar',
+      syntax: 'lark',
+      definition: APPLY_PATCH_GRAMMAR,
+    },
+  }
+  if (value.defer_loading !== undefined) custom.defer_loading = value.defer_loading
+  return custom
+}
+
+/** Replace DSH's JSON function declaration with the Responses custom grammar tool. */
+export function addCodexApplyPatch(body: JsonObject): JsonObject {
+  if (!Array.isArray(body.tools)) return body
+  let changed = false
+  const tools = body.tools.map(tool => {
+    if (!isApplyPatchTool(tool) || typeof tool !== 'object' || tool === null) return tool
+    if ((tool as JsonObject).type === 'custom') return tool
+    changed = true
+    return applyPatchTool(tool)
+  })
+  return changed ? { ...body, tools } : body
+}
+
+function applyPatchInputOfCall(item: JsonObject): { callId: string; input: string } | undefined {
+  if (item.type !== 'function_call' || item.name !== 'apply_patch') return undefined
+  if (typeof item.call_id !== 'string' || item.call_id.length === 0) return undefined
+  const raw = item.arguments
+  const argumentsObject = typeof raw === 'string'
+    ? (() => {
+      try {
+        return JSON.parse(raw) as unknown
+      } catch {
+        return undefined
+      }
+    })()
+    : raw
+  if (typeof argumentsObject !== 'object' || argumentsObject === null) return undefined
+  const input = (argumentsObject as JsonObject).input
+  return typeof input === 'string' ? { callId: item.call_id, input } : undefined
+}
+
+function canRewriteApplyPatchHistory(body: JsonObject): boolean {
+  if (!Array.isArray(body.input)) return true
+  return body.input.every(item => {
+    if (typeof item !== 'object' || item === null) return true
+    const value = item as JsonObject
+    return value.type !== 'function_call' || value.name !== 'apply_patch'
+      || applyPatchInputOfCall(value) !== undefined
+  })
+}
+
+/** Replay apply_patch calls as custom tool items after pi-ai's generic conversion. */
+export function rewriteCodexApplyPatchHistory(body: JsonObject): JsonObject {
+  if (!Array.isArray(body.input) || !canRewriteApplyPatchHistory(body)) return body
+  const applyCallIds = new Set<string>()
+  for (const item of body.input) {
+    if (typeof item !== 'object' || item === null) continue
+    const value = item as JsonObject
+    if (value.type === 'custom_tool_call' && value.name === 'apply_patch' && typeof value.call_id === 'string') {
+      applyCallIds.add(value.call_id)
+    }
+    const call = applyPatchInputOfCall(value)
+    if (call !== undefined) applyCallIds.add(call.callId)
+  }
+  if (applyCallIds.size === 0) return body
+
+  let changed = false
+  const input = body.input.map(item => {
+    if (typeof item !== 'object' || item === null) return item
+    const value = item as JsonObject
+    const call = applyPatchInputOfCall(value)
+    if (call !== undefined) {
+      const next: JsonObject = {
+        type: 'custom_tool_call',
+        call_id: call.callId,
+        name: 'apply_patch',
+        input: call.input,
+      }
+      if (typeof value.id === 'string') next.id = value.id
+      changed = true
+      return next
+    }
+    if (value.type === 'function_call_output'
+      && typeof value.call_id === 'string'
+      && applyCallIds.has(value.call_id)) {
+      changed = true
+      return {
+        type: 'custom_tool_call_output',
+        call_id: value.call_id,
+        output: value.output,
+      }
+    }
+    return item
+  })
+  return changed ? { ...body, input } : body
+}
+
+/** Compose the plugin-only Responses rewrites without changing DSH's tool API. */
+export function rewriteCodexResponsesBody(body: JsonObject): JsonObject {
+  let next = body
+  if (hasWebSearchTool(next)) {
+    next = addHostedWebSearch(next)
+  } else if (hasRemoteCompaction(next)) {
+    next = replaceRemoteCompactions(next)
+  }
+  if (hasFunctionApplyPatchTool(next) && canRewriteApplyPatchHistory(next)) {
+    next = addCodexApplyPatch(next)
+    next = rewriteCodexApplyPatchHistory(next)
+  }
+  return next
+}
+
 /** Convert a generic DSH Responses tool list to the hosted Codex variant. */
 export function addHostedWebSearch(body: JsonObject): JsonObject {
   const tools = Array.isArray(body.tools) ? body.tools.filter(tool => !isWebSearchTool(tool)) : []
@@ -140,18 +303,28 @@ function hasRemoteCompaction(body: JsonObject): boolean {
 
 function canPatchBody(body: JsonObject): boolean {
   return isGptModel(body.model)
-    && (hasWebSearchTool(body) || hasRemoteCompaction(body))
+    && (hasWebSearchTool(body)
+      || hasRemoteCompaction(body)
+      || (hasFunctionApplyPatchTool(body) && canRewriteApplyPatchHistory(body)))
+}
+
+/** Add provider options that older pi-ai adapters do not copy themselves. */
+function applyRequestWireOptions(body: JsonObject, options: CodexRequestWireOptions): JsonObject {
+  if (options.serviceTier === undefined || !isGptModel(body.model)) return body
+  return { ...body, service_tier: options.serviceTier }
 }
 
 /**
  * Install a scoped fetch shim for pi-ai's already-built Responses request.
  * The generic DSH adapter remains the owner of auth, streaming, replay, and
- * attachments; this shim changes only the hosted-tool portion of the wire body.
+ * attachments; this shim changes only Codex's Responses tool and compaction
+ * representation at the wire boundary.
  */
 function installGlobalHostedWebSearchPatch(): () => void {
   const original = globalThis.fetch
   const patched: typeof fetch = async (input, init) => {
-    if (!HOSTED_REQUESTS.getStore()) return original(input, init)
+    const options = HOSTED_REQUESTS.getStore()
+    if (options === undefined) return original(input, init)
     const request = new Request(input, init)
     if (!isResponsesRequest(request.url)) return original(input, init)
 
@@ -161,13 +334,29 @@ function installGlobalHostedWebSearchPatch(): () => void {
     } catch {
       return original(input, init)
     }
-    if (!canPatchBody(body)) return original(input, init)
+    const requestBody = applyRequestWireOptions(body, options)
+    if (!canPatchBody(requestBody)) {
+      if (requestBody === body) return original(input, init)
+      const headers = new Headers(request.headers)
+      headers.delete('content-length')
+      return original(new Request(request, {
+        body: JSON.stringify(requestBody),
+        headers,
+      }))
+    }
 
-    const fallbackRequest = request.clone()
+    const fallbackHeaders = new Headers(request.headers)
+    fallbackHeaders.delete('content-length')
+    const fallbackRequest = requestBody === body
+      ? request.clone()
+      : new Request(request, {
+        body: JSON.stringify(requestBody),
+        headers: fallbackHeaders,
+      })
     const headers = new Headers(request.headers)
     headers.delete('content-length')
     const hostedRequest = new Request(request, {
-      body: JSON.stringify(hasWebSearchTool(body) ? addHostedWebSearch(body) : replaceRemoteCompactions(body)),
+      body: JSON.stringify(rewriteCodexResponsesBody(requestBody)),
       headers,
     })
     try {
@@ -203,13 +392,16 @@ export function installHostedWebSearch(): () => void {
 }
 
 /** Iterate an existing DSH stream with the hosted-request context installed. */
-export function hostedWebSearchStream(next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk> {
+export function hostedWebSearchStream(
+  next: () => AsyncIterable<StreamChunk>,
+  options: CodexRequestWireOptions = {},
+): AsyncIterable<StreamChunk> {
   return (async function* (): AsyncGenerator<StreamChunk> {
     const iterator = next()[Symbol.asyncIterator]()
     let completed = false
     try {
       while (true) {
-        const item = await HOSTED_REQUESTS.run(true, () => iterator.next())
+        const item = await HOSTED_REQUESTS.run(options, () => iterator.next())
         if (item.done) {
           completed = true
           return
@@ -307,7 +499,38 @@ function compactText(body: JsonObject): string {
   return encrypted.length === 0 ? '' : `${REMOTE_COMPACTION_OPEN}${encrypted}${REMOTE_COMPACTION_CLOSE}`
 }
 
-async function remoteCompact(ctx: Context, options: GenerateOptions): Promise<string> {
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+/** Map the Responses compact usage object without inventing missing counts. */
+function compactUsage(body: JsonObject): TokenUsage | undefined {
+  if (typeof body.usage !== 'object' || body.usage === null) return undefined
+  const raw = body.usage as JsonObject
+  const inputTokens = nonNegativeInteger(raw.input_tokens)
+  const outputTokens = nonNegativeInteger(raw.output_tokens)
+  if (inputTokens === undefined || outputTokens === undefined) return undefined
+
+  const details = typeof raw.input_tokens_details === 'object' && raw.input_tokens_details !== null
+    ? raw.input_tokens_details as JsonObject
+    : undefined
+  const cacheReadTokens = nonNegativeInteger(details?.cached_tokens)
+  const cacheWriteTokens = nonNegativeInteger(details?.cache_write_tokens)
+  const cached = cacheReadTokens ?? 0
+  const writes = cacheWriteTokens ?? 0
+
+  // Responses input_tokens includes the cache buckets. Reject an inconsistent
+  // response instead of clamping it and reporting numbers that no longer sum.
+  if (cached + writes > inputTokens) return undefined
+  return {
+    inputTokens: inputTokens - cached - writes,
+    outputTokens,
+    ...cacheReadTokens !== undefined && cacheReadTokens > 0 ? { cacheReadTokens } : {},
+    ...cacheWriteTokens !== undefined && cacheWriteTokens > 0 ? { cacheWriteTokens } : {},
+  }
+}
+
+async function remoteCompact(ctx: Context, options: GenerateOptions): Promise<RemoteCompactResult> {
   const profile = profileOf(ctx, options.provider)
   if (!supportsResponses(profile, options.provider) || profile?.baseURL === undefined) {
     throw new Error('Codex remote compaction requires an OpenAI Responses provider with baseURL')
@@ -324,7 +547,8 @@ async function remoteCompact(ctx: Context, options: GenerateOptions): Promise<st
   const body = await response.json() as JsonObject
   const text = compactText(body)
   if (text.length === 0) throw new Error('remote compaction returned no compaction text')
-  return text
+  const usage = compactUsage(body)
+  return { text, ...usage === undefined ? {} : { usage } }
 }
 
 /** Remote-first compaction waterfall with the existing DSH path as fallback. */
@@ -335,11 +559,11 @@ export function remoteCompactStream(
 ): AsyncIterable<StreamChunk> {
   return (async function* (): AsyncGenerator<StreamChunk> {
     try {
-      const text = await remoteCompact(ctx, options)
+      const result = await remoteCompact(ctx, options)
       yield { type: 'block-start', index: 0, blockType: 'text' }
-      yield { type: 'text-delta', index: 0, text }
-      yield { type: 'block-end', index: 0, block: { type: 'text', text } }
-      yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
+      yield { type: 'text-delta', index: 0, text: result.text }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: result.text } }
+      if (result.usage !== undefined) yield { type: 'usage', usage: result.usage }
       yield { type: 'finish', reason: { kind: 'stop' } }
     } catch (error) {
       if (options.signal?.aborted) throw error
@@ -347,7 +571,8 @@ export function remoteCompactStream(
       ctx.logger.warn(error)
       // The local fallback still replays the marker through a later GPT
       // Responses request, so it needs the same scoped wire context.
-      yield* hostedWebSearchStream(next)
+      const serviceTier = serviceTierOf(options)
+      yield* hostedWebSearchStream(next, serviceTier === undefined ? {} : { serviceTier })
     }
   })()
 }

@@ -19,7 +19,7 @@
 - id: codex-tools
   name: '@shuind/dsh-codex-harness'
   config:
-    collaborationPrompt: false
+    collaborationPrompt: true
 
 # Background jobs use the host-plane registry. A busy agent receives a
 # completion in its next step; an idle agent keeps it pending until the next

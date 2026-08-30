@@ -6,6 +6,8 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
+import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { FsInfo, FsTarget, FsWriteIntent } from '@deepseek-ai/dsh-fs'
@@ -17,24 +19,16 @@ import type {} from '@deepseek-ai/dsh-shell'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-terminal'
 import { CODEX_CONTEXT_MAX } from './context.ts'
-import { applyPatchHunks, parsePatch } from './patch.ts'
+import { APPLY_PATCH_DESCRIPTION, applyPatchHunks, parsePatch } from './patch.ts'
 import type { PatchFile } from './patch.ts'
 import { renderExecResult, runExecCommand, runWriteStdin } from './exec.ts'
 import type { ExecCommandArgs, ExecResult, WriteStdinArgs } from './exec.ts'
 import { hostedWebSearchStream, installHostedWebSearch, remoteCompactStream } from './remote.ts'
 import { registerCodexActivityProjection } from './activity.ts'
 
-declare module '@deepseek-ai/dsh-llm' {
-  interface LlmCallConfig {
-    /** Codex request context capacity override, in tokens. */
-    contextWindow?: number
-    /** Provider-facing service tier, for example Responses `priority`. */
-    serviceTier?: string
-  }
-}
-
 export const name = 'codex'
 export const inject = ['tools', 'systemPrompt', 'shell', 'fs', 'llm', 'credentials', 'settings']
+const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 
 /** Configuration for the Codex shell result bridge. */
 export interface Config {
@@ -59,7 +53,7 @@ export const Config: z<Config> = z.object({
   defaultYieldTimeMs: z.number().step(1).min(0).default(10_000),
   pollYieldTimeMs: z.number().step(1).min(0).default(5_000),
   writeYieldTimeMs: z.number().step(1).min(0).default(250),
-  maxOutputBytes: z.number().step(1).min(1).default(64_000),
+  maxOutputBytes: z.number().step(1).min(1).default(DEFAULT_MAX_OUTPUT_BYTES),
   hostedWebSearch: z.boolean().default(true),
   remoteCompact: z.boolean().default(true),
   collaborationPrompt: z.boolean().default(false),
@@ -74,6 +68,14 @@ export interface CodexSettings {
   fast: boolean
   /** Optional context capacity override, in tokens. */
   contextWindow?: number
+}
+
+/** Plugin-owned extension envelope; official DSH can carry these as unknown fields. */
+export interface CodexRequestConfig extends LlmCallConfig {
+  /** Codex request context capacity override, in tokens. */
+  contextWindow?: number
+  /** Provider-facing service tier, for example Responses `priority`. */
+  serviceTier?: string
 }
 
 export const CODEX_SETTINGS_SCHEMA: z<CodexSettings> = z.object({
@@ -207,7 +209,10 @@ function installCodexSettings(ctx: Context): { current: () => CodexSettings } {
 }
 
 /** Apply the live Codex controls to one agent request without leaking them to other routes. */
-export function applyCodexRequestSettings(request: LlmCallConfig, settings: CodexSettings): LlmCallConfig {
+export function applyCodexRequestSettings(
+  request: CodexRequestConfig,
+  settings: CodexSettings,
+): CodexRequestConfig {
   const {
     contextWindow: _inheritedContextWindow,
     serviceTier: _inheritedServiceTier,
@@ -221,9 +226,8 @@ export function applyCodexRequestSettings(request: LlmCallConfig, settings: Code
   }
 }
 
-const CODEX_BASE_PROMPT = String.raw`You are Codex, based on {{model}}. You are running as a coding agent in dsh Web on a user's computer.
-
-## General
+// The shipped persona owns the single Codex identity line, model, and working directory.
+const CODEX_BASE_PROMPT = String.raw`## General
 
 - When searching for text or files, prefer using rg or rg --files respectively because rg is much faster than alternatives like grep. If rg is not available, use the next best alternative.
 
@@ -231,7 +235,6 @@ const CODEX_BASE_PROMPT = String.raw`You are Codex, based on {{model}}. You are 
 
 - Default to ASCII when editing or creating files. Only introduce non-ASCII or other Unicode characters when there is a clear justification and the file already uses them.
 - Add succinct code comments that explain non-obvious code. Do not add comments that merely narrate assignments or control flow.
-- Use apply_patch for single-file edits when practical. The apply_patch tool accepts its freeform patch language; do not wrap that patch in JSON.
 - You may be in a dirty git worktree. Never revert existing changes you did not make unless the user explicitly requests it. If unrelated files are changed, leave them alone.
 
 ## Planning
@@ -242,44 +245,47 @@ const CODEX_BASE_PROMPT = String.raw`You are Codex, based on {{model}}. You are 
 ## dsh session
 
 - The user and you share one workspace. Inspect the repository and every applicable AGENTS.md before editing.
-- This session's preset was selected when the session was created and stays fixed for its lifetime. Do not attempt to switch the preset or replace its tool catalog while the session is running.
-- dsh provides the execution, filesystem, session, policy, and Skills capabilities behind these tools. Use those extension points as supplied; do not invent a second harness or bypass the filesystem service for file edits.
-- The core Codex tool names, arguments, and result formats are fixed: use exec_command for terminal work, write_stdin for an existing interactive command, apply_patch for file changes, and update_plan for multi-step tasks.
 
 ## Task execution
 
 - Keep the user informed with concise progress updates and lead with the result.
-- Prefer existing functions and extension points over new machinery.
-- Do not claim that a command, edit, or test succeeded unless it actually succeeded.
-- Use the exact tool names and argument formats supplied by this session; do not invent replacement editing tools.
 
 ## Presenting your work
 
 - Be concise, direct, friendly, and actionable.
-- For substantial work, explain what changed and why, then mention relevant verification and next steps.
+- For substantial work, explain what changed and why, then briefly note how the work was verified and what comes next.
 - Do not dump large files into the conversation; refer to their paths.
 - Use plain text with short sections only when they improve scanability.
 `
 
 const CODEX_COLLABORATION_PROMPT = String.raw`## Collaboration
 
-- Ask, align, and clarify first. Try your best to understand the user's full picture.
+- Gather enough context from the user then achieve the user's goal through the clearest, most effective path.
 - Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done.
 - Convey enough valuable information with as few words as possible. Stay focused on the end goal.
 - Solve problems by thinking from first principles and at a higher level.
-- Make things as effortless as possible for the user.
 `
 
-/** Build the Codex system prompt with optional, user-enabled collaboration guidance. */
+/** Put the agent persona first and omit the generic Harness identity opener. */
+export function normalizeCodexPromptAssembly(assembly: PromptAssembly): PromptAssembly {
+  const sections = assembly.sections.filter(section => section.name !== 'harness:identity')
+  const persona = sections.find(section => section.name === 'deployment:persona')
+  if (persona === undefined) return { ...assembly, sections }
+  return {
+    ...assembly,
+    sections: [persona, ...sections.filter(section => section.name !== 'deployment:persona')],
+  }
+}
+
+/** Build the Codex operating prompt with optional, user-enabled collaboration guidance. */
 export function buildCodexSystemPrompt(config: Pick<Config, 'collaborationPrompt'> = {}): string {
   return config.collaborationPrompt === true
     ? `${CODEX_BASE_PROMPT}\n\n${CODEX_COLLABORATION_PROMPT}`
     : CODEX_BASE_PROMPT
 }
 
-const EXEC_COMMAND_DESCRIPTION = 'Runs a command in a PTY, returning output or a session ID for ongoing interaction.'
+const EXEC_COMMAND_DESCRIPTION = 'Runs a command in a PTY, returning output, a session ID for ongoing interaction, or a background job ID when requested.'
 const WRITE_STDIN_DESCRIPTION = 'Writes characters to an existing unified exec session and returns recent output.'
-const APPLY_PATCH_DESCRIPTION = 'The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.'
 const UPDATE_PLAN_DESCRIPTION =
   'Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.'
 
@@ -383,7 +389,7 @@ async function applyOnePatch(
 
   const sourceInfo = await observedTarget(ctx, target, exec)
   const original = await ctx.fs.readText(target, exec.signal)
-  const updated = file.kind === 'delete' ? undefined : applyPatchHunks(original, file.hunks)
+  const updated = file.kind === 'delete' ? undefined : applyPatchHunks(original, file.hunks, file.path)
   if (file.kind === 'delete') {
     await deletePatchedFile(ctx, target, sourceInfo.version, exec, policy)
     return { path: file.path, operation: 'deleted' }
@@ -443,6 +449,7 @@ function registerExecTools(ctx: Context, config: Required<Config>): void {
       cmd: { type: 'string', required: true, description: 'Shell command to execute.' },
       workdir: { type: 'string', description: 'Working directory for the command. Defaults to the turn cwd.' },
       tty: { type: 'boolean', description: 'True allocates a PTY for the command; false or omitted uses plain pipes.' },
+      run_in_background: { type: 'boolean', description: 'Run as a DSH background job and return its job id immediately; collect output with job_output and stop it with job_kill. Only supported for pipe-backed commands.' },
       yield_time_ms: { type: 'number', description: 'Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.' },
       max_output_tokens: { type: 'number', description: 'Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.' },
       shell: { type: 'string', description: "Shell binary to launch. Defaults to the user's default shell." },
@@ -457,6 +464,7 @@ function registerExecTools(ctx: Context, config: Required<Config>): void {
           wall_time_seconds: { type: 'number', required: true },
           exit_code: { type: 'number' },
           session_id: { type: 'number' },
+          job_id: { type: 'string' },
           original_token_count: { type: 'number' },
           output: { type: 'string', required: true },
         },
@@ -589,7 +597,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     defaultYieldTimeMs: config.defaultYieldTimeMs ?? 10_000,
     pollYieldTimeMs: config.pollYieldTimeMs ?? 5_000,
     writeYieldTimeMs: config.writeYieldTimeMs ?? 250,
-    maxOutputBytes: config.maxOutputBytes ?? 64_000,
+    maxOutputBytes: config.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
     hostedWebSearch: config.hostedWebSearch ?? true,
     remoteCompact: config.remoteCompact ?? true,
     collaborationPrompt: config.collaborationPrompt ?? false,
@@ -610,23 +618,24 @@ export function apply(ctx: Context, config: Config = {}): void {
     const request = await next()
     return applyCodexRequestSettings(request, codexSettings.current())
   })
-  if ((resolved.hostedWebSearch || resolved.remoteCompact) && typeof (ctx as unknown as { effect?: unknown }).effect === 'function') {
+  if (typeof (ctx as unknown as { effect?: unknown }).effect === 'function') {
     const disposeHostedWebSearch = installHostedWebSearch()
     ctx.effect(() => disposeHostedWebSearch, 'codex: Responses transport wrapper')
   }
-  if (resolved.hostedWebSearch || resolved.remoteCompact) {
-    ctx.on('llm/stream', ((options: any, next: any) => {
-      if (resolved.remoteCompact && options.purpose === 'compaction' && isGptModel(options.model)) {
-        return remoteCompactStream(ctx, options, next)
-      }
-      if ((resolved.hostedWebSearch || resolved.remoteCompact)
-        && options.purpose === undefined
-        && isGptModel(options.model)) {
-        return hostedWebSearchStream(next)
-      }
-      return next()
-    }) as any)
-  }
+  ctx.on('llm/stream', ((options: any, next: any) => {
+    if (resolved.remoteCompact && options.purpose === 'compaction' && isGptModel(options.model)) {
+      return remoteCompactStream(ctx, options, next)
+    }
+    // Keep all ordinary GPT Responses calls inside the plugin-owned transport
+    // scope so apply_patch can use the same wire bridge even when hosted search
+    // and remote compaction are disabled.
+    if (options.purpose === undefined && isGptModel(options.model)) {
+      return hostedWebSearchStream(next, { serviceTier: options.serviceTier })
+    }
+    return next()
+  }) as any)
+  ctx.on('system-prompt/assemble', async (_assembly, _context, next) =>
+    normalizeCodexPromptAssembly(await next()))
   ctx.systemPrompt.section({ name: 'codex:base', order: 10, text: buildCodexSystemPrompt(resolved) })
   registerExecTools(ctx, resolved)
   registerPatchTool(ctx)

@@ -1,9 +1,10 @@
 /** Parser and line-oriented applicator for Codex's `apply_patch` language. */
 
+export const APPLY_PATCH_DESCRIPTION = 'Edits files using Codex patch syntax with Begin/End Patch markers and file update directives. In hunk lines, the first character is the operation marker; repeat a source-leading marker when the source line itself starts with one.'
+
 /** The grammar sent to providers that support OpenAI custom grammar tools. */
-export const APPLY_PATCH_GRAMMAR = String.raw`start: begin_patch environment_id? hunk+ end_patch
+export const APPLY_PATCH_GRAMMAR = String.raw`start: begin_patch hunk+ end_patch
 begin_patch: "*** Begin Patch" LF
-environment_id: "*** Environment ID: " filename LF
 end_patch: "*** End Patch" LF?
 hunk: add_hunk | delete_hunk | update_hunk
 add_hunk: "*** Add File: " filename LF add_line+
@@ -46,8 +47,6 @@ function isFileHeader(line: string): boolean {
     || trimmed.startsWith('*** Update File: ')
 }
 
-const ENVIRONMENT_ID_MARKER = '*** Environment ID:'
-
 function unwrapHeredoc(input: string): string {
   const normalized = input.replaceAll('\r\n', '\n').trim()
   const lines = normalized.split('\n')
@@ -85,13 +84,8 @@ export function parsePatch(input: string): PatchFile[] {
   const files: PatchFile[] = []
   let index = 1
   const end = lines.length - 1
-  if (lines[index]?.trim().startsWith(ENVIRONMENT_ID_MARKER) === true) {
-    const environmentId = lines[index]!.trim().slice(ENVIRONMENT_ID_MARKER.length).trim()
-    if (environmentId.length === 0) invalid('environment id cannot be empty')
-    index++
-    if (lines[index]?.trim().startsWith(ENVIRONMENT_ID_MARKER) === true) {
-      invalid('environment id cannot be specified more than once')
-    }
+  if (lines[index]?.trim().startsWith('*** Environment ID:') === true) {
+    invalid('environment selection is unavailable in this single-environment DSH plugin')
   }
   while (index < end) {
     const header = lines[index++]?.trim()
@@ -213,16 +207,47 @@ function findSequence(
   return -1
 }
 
+function displayPatchLine(line: string): string {
+  if (line.length === 0) return '<empty>'
+  return line.replaceAll(' ', '[space]').replaceAll('\t', '[tab]')
+}
+
+function formatPatchExcerpt(lines: readonly string[], start: number, count: number): string {
+  if (lines.length === 0) return '  <empty file>'
+  const first = Math.max(0, Math.min(start, lines.length - 1))
+  return lines.slice(first, first + count)
+    .map((line, offset) => `  ${first + offset + 1}: ${displayPatchLine(line)}`)
+    .join('\n')
+}
+
+function mismatchMessage(
+  label: string,
+  hunkIndex: number,
+  expected: readonly string[],
+  actual: readonly string[],
+  from: number,
+  endOfFile: boolean,
+): string {
+  const expectedPreview = expected.slice(0, 12)
+    .map((line, index) => `  ${index + 1}: ${displayPatchLine(line)}`)
+    .join('\n')
+  const expectedSuffix = expected.length > 12 ? '\n  ...' : ''
+  const excerptStart = endOfFile ? Math.max(0, actual.length - 6) : Math.max(0, from - 2)
+  const markerHint = expected.some(wanted => wanted.length > 0 && actual.includes(`-${wanted}`))
+    ? '\nHint: if a source line starts with a patch marker, repeat that marker after the operation marker; for example, `-- item` deletes the source line `- item`.'
+    : ''
+  return `could not find expected lines in ${label} hunk ${hunkIndex + 1} (search starts at line ${from + 1})\nExpected:\n${expectedPreview}${expectedSuffix}\nFile excerpt:\n${formatPatchExcerpt(actual, excerptStart, 10)}${markerHint}`
+}
+
 /** Apply parsed update hunks and return LF-normalized text. */
-export function applyPatchHunks(original: string, hunks: readonly PatchHunk[]): string {
+export function applyPatchHunks(original: string, hunks: readonly PatchHunk[], label = 'file'): string {
   const value = splitText(original.replaceAll('\r\n', '\n'))
   let cursor = 0
-  for (const hunk of hunks) {
+  for (const [hunkIndex, hunk] of hunks.entries()) {
     const expected = hunk.lines.filter(line => line.kind !== 'add').map(line => line.text)
     const start = findSequence(value.lines, expected, cursor, hunk.endOfFile)
     if (start < 0) {
-      const detail = expected.join('\n')
-      invalid(`could not find expected lines${detail.length === 0 ? '' : `:\n${detail}`}`)
+      invalid(mismatchMessage(label, hunkIndex, expected, value.lines, cursor, hunk.endOfFile))
     }
     const replacement = hunk.lines.filter(line => line.kind !== 'delete').map(line => line.text)
     value.lines.splice(start, expected.length, ...replacement)
