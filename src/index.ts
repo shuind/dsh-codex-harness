@@ -6,6 +6,7 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -208,6 +209,61 @@ function installCodexSettings(ctx: Context): { current: () => CodexSettings } {
   return { current: () => source() }
 }
 
+function hasOpenTurn(session: Session): boolean {
+  const start = session.events.findLast(event => event.type === 'turn/start')
+  const end = session.events.findLast(event => event.type === 'turn/end')
+  return start !== undefined && (end === undefined || start.seq > end.seq)
+}
+
+/**
+ * Pair the live Codex capacity with the token-meter context projection.
+ *
+ * The core loop records adapter metadata in `request/context`, while Codex's
+ * setting is a plugin-owned request extension. Appending the override after
+ * the loop's metadata event keeps the official ContextMeter and compaction
+ * engine on the same effective capacity.
+ */
+export function syncCodexContextWindow(session: Session, contextWindow: number | undefined): void {
+  if (contextWindow === undefined
+    || !Number.isSafeInteger(contextWindow)
+    || contextWindow <= 0
+    || !hasOpenTurn(session)) return
+  const config = session.requestHeader()?.config as {
+    provider?: unknown
+    model?: unknown
+  } | undefined
+  if (typeof config?.provider !== 'string'
+    || typeof config.model !== 'string'
+    || !isGptModel(config.model)) return
+  const current = session.requestContext()
+  if (current?.provider === config.provider
+    && current.model === config.model
+    && current.contextWindow === contextWindow) return
+  session.append('request/context', {
+    provider: config.provider,
+    model: config.model,
+    contextWindow,
+  })
+}
+
+/** Keep the official context meter synchronized with a live Codex override. */
+function installCodexContextProjection(ctx: Context, current: () => CodexSettings): void {
+  const sync = (session: Session): void => {
+    syncCodexContextWindow(session, current().contextWindow)
+  }
+  const syncAll = (): void => {
+    const sessions = ctx.get('sessions') as { list?: () => readonly Session[] } | undefined
+    for (const session of sessions?.list?.() ?? []) sync(session)
+  }
+  ctx.on('session/event', (session, event) => {
+    if (event.type === 'request/header' || event.type === 'request/context') sync(session)
+  })
+  ctx.on('settings/document-updated', ns => {
+    if (ns === CODEX_SETTINGS_NAMESPACE) syncAll()
+  })
+  syncAll()
+}
+
 /** Apply the live Codex controls to one agent request without leaking them to other routes. */
 export function applyCodexRequestSettings(
   request: CodexRequestConfig,
@@ -260,7 +316,7 @@ const CODEX_BASE_PROMPT = String.raw`## General
 
 const CODEX_COLLABORATION_PROMPT = String.raw`## Collaboration
 
-- Gather enough context from the user then achieve the user's goal through the clearest, most effective path.
+- Ask, align, and clarify first. Gather enough context from the user, then align the approach to achieve the user's goal through the clearest, most effective path.
 - Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done.
 - Convey enough valuable information with as few words as possible. Stay focused on the end goal.
 - Solve problems by thinking from first principles and at a higher level.
@@ -611,6 +667,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   watchConfiguredGptModels(ctx)
   registerCodexActivityProjection(ctx)
   const codexSettings = installCodexSettings(ctx)
+  installCodexContextProjection(ctx, codexSettings.current)
   // Keep these controls in the request config rather than mutating provider
   // settings. That makes a change apply to the next step without rebuilding
   // the user's model catalog, while the LLM service still freezes it per call.

@@ -1,6 +1,7 @@
 /** Browser controls for the Codex request settings mounted by the Host plugin. */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
@@ -15,9 +16,8 @@ import { modelActivity, sameModelActivity } from './activity.ts'
 
 const NS = 'codex' as const
 const SETTINGS_NAMESPACE = 'codex'
-const ACTIVITY_FALLBACK_SLOT = 'conversation.composer.dock' as const
 const FAST_FALLBACK_SLOT = 'conversation.input.right' as const
-const CONTEXT_FALLBACK_SLOT = 'conversation.input.right' as const
+const LEGACY_OVERLAY_SLOT = 'conversation.input.overlay' as const
 const DEFAULT_CONTEXT_WINDOW = 262_144
 
 interface CodexSettings {
@@ -45,14 +45,14 @@ const zh = {
   fast: 'Fast',
   fastOn: 'Fast mode on (priority tier)',
   fastOff: 'Fast mode off',
-  fastStateOn: '开',
-  fastStateOff: '关',
-  contextSize: '上下文大小',
-  contextSizeDescription: '设置下次请求的上下文容量，单位为 K tokens。',
-  contextRestore: '恢复模型默认值',
-  activityCompacting: '正在压缩上下文...',
-  activityRequestingModel: '请求中...',
-  activityModelReply: '回复中...',
+  fastStateOn: '\u5f00',
+  fastStateOff: '\u5173',
+  contextSize: '\u4e0a\u4e0b\u6587\u5927\u5c0f',
+  contextSizeDescription: '\u8bbe\u7f6e\u4e0b\u6b21\u8bf7\u6c42\u7684\u4e0a\u4e0b\u6587\u5bb9\u91cf\uff0c\u5355\u4f4d\u4e3a K tokens\u3002',
+  contextRestore: '\u6062\u590d\u6a21\u578b\u9ed8\u8ba4\u503c',
+  activityCompacting: '\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587...',
+  activityRequestingModel: '\u8bf7\u6c42\u4e2d...',
+  activityModelReply: '\u56de\u590d\u4e2d...',
 } as const
 
 type CodexKey = keyof typeof en
@@ -60,6 +60,13 @@ type CodexKey = keyof typeof en
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     codex: CodexKey
+  }
+  interface SlotMap {
+    'conversation.input.overlay': {
+      kind: 'list'
+      scope: 'session'
+      owner: Record<never, never>
+    }
   }
 }
 
@@ -116,32 +123,33 @@ function FastModeFallback(
   )
 }
 
-type LegacyContextProps = PropsRuntime<'conversation.input.right'>
+type LegacyOverlayProps = PropsRuntime<typeof LEGACY_OVERLAY_SLOT>
   & InjectFace<InputSettingsControlInjected>
   & PropsLocale<'codex'>
 
+type ContextSizeControlProps = Pick<
+  LegacyOverlayProps,
+  'sessionId' | 'useSessions' | 'useSettings' | 't'
+> & Pick<InputSettingsControlInjected, 'setSetting' | 'unsetSetting'> & {
+  contextWindow: number
+}
+
 type ContextPressureReader = (key: 'contextPressure') => { contextWindow?: number } | undefined
 
-function contextWindowFromProjection(useProjection: LegacyContextProps['useProjection']): number {
+function contextWindowFromProjection(useProjection: LegacyOverlayProps['useProjection']): number {
   const pressure = (useProjection as unknown as ContextPressureReader)('contextPressure')
   return pressure?.contextWindow !== undefined && pressure.contextWindow > 0
     ? pressure.contextWindow
     : DEFAULT_CONTEXT_WINDOW
 }
 
-type ContextSizeControlProps = {
-  contextWindow: number
-  useSettings: LegacyContextProps['useSettings']
-  setSetting: InputSettingsControlInjected['setSetting']
-  unsetSetting: InputSettingsControlInjected['unsetSetting']
-  t: LegacyContextProps['t']
-}
-
-/** Settings form kept inside the official composer slot's popover. */
+/** Settings form appended to the old host's context meter panel. */
 function ContextSizeControl({
-  contextWindow, useSettings, setSetting, unsetSetting, t,
+  contextWindow, sessionId, useSessions, useSettings, setSetting, unsetSetting, t,
 }: ContextSizeControlProps) {
+  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
   const snapshot = useSettings(state => state as { value?: CodexSettings; writable: boolean })
+  if (!isCodexPresetId(agentPreset)) return null
   const configured = snapshot.value?.contextWindow
   const maxK = CODEX_CONTEXT_MAX / CODEX_CONTEXT_UNIT
   const valueK = Math.min(maxK, Math.max(1, Math.round((configured ?? contextWindow) / CODEX_CONTEXT_UNIT)))
@@ -154,7 +162,13 @@ function ContextSizeControl({
   }
 
   return (
-    <div style={{ marginTop: 0, display: 'grid', gap: 8 }}>
+    <div style={{
+      display: 'grid',
+      gap: 8,
+      marginTop: 10,
+      paddingTop: 10,
+      borderTop: '1px solid var(--dsw-alias-border-l2)',
+    }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
         <strong style={{ color: 'var(--dsw-alias-label-primary)', fontSize: 13 }}>{t('contextSize')}</strong>
         <span style={{ color: 'var(--dsw-alias-label-secondary)', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
@@ -227,113 +241,10 @@ function ContextSizeControl({
   )
 }
 
-/** Compact trigger used when the host has no ContextMeter settings child slot. */
-function LegacyContextSizeControl({ sessionId, useSessions, useProjection, useSettings, setSetting, unsetSetting, t }: LegacyContextProps) {
-  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
-  const contextWindow = contextWindowFromProjection(useProjection)
-  const snapshot = useSettings(state => state as { value?: CodexSettings; writable: boolean })
-  const configured = snapshot.value?.contextWindow
-  const valueK = Math.min(
-    CODEX_CONTEXT_MAX / CODEX_CONTEXT_UNIT,
-    Math.max(1, Math.round((configured ?? contextWindow) / CODEX_CONTEXT_UNIT)),
-  )
-  const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLSpanElement | null>(null)
-
-  useEffect(() => {
-    if (!open) return undefined
-    const onPointerDown = (event: PointerEvent): void => {
-      if (event.target instanceof Node && rootRef.current?.contains(event.target) === true) return
-      setOpen(false)
-    }
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open])
-
-  if (!isCodexPresetId(agentPreset)) return null
-  return (
-    <span ref={rootRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-      <button
-        type="button"
-        aria-label={`${t('contextSize')}: ${valueK}K`}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        disabled={snapshot.writable === false}
-        title={t('contextSize')}
-        onMouseDown={event => { event.preventDefault() }}
-        onClick={() => { setOpen(value => !value) }}
-        style={{
-          boxSizing: 'border-box',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 3,
-          height: 28,
-          border: 0,
-          borderRadius: 7,
-          padding: '0 6px',
-          color: configured === undefined
-            ? 'var(--dsw-alias-label-secondary)'
-            : 'var(--dsw-static-blue-500)',
-          background: open ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
-          cursor: snapshot.writable === false ? 'default' : 'pointer',
-          font: 'inherit',
-          fontSize: 12,
-          lineHeight: '20px',
-          fontWeight: configured === undefined ? 400 : 600,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        <span>{valueK}K</span>
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden>
-          <path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
-      {open && (
-        <div
-          role="dialog"
-          aria-label={t('contextSize')}
-          style={{
-            position: 'absolute',
-            right: 0,
-            bottom: 'calc(100% + 8px)',
-            zIndex: 20,
-            boxSizing: 'border-box',
-            width: 300,
-            maxWidth: 'calc(100vw - 24px)',
-            padding: '10px 12px 12px',
-            border: '1px solid var(--dsw-alias-border-l2)',
-            borderRadius: 10,
-            color: 'var(--dsw-alias-label-primary)',
-            background: 'var(--dsw-alias-bg-base)',
-            boxShadow: 'var(--dsw-shadow-lv2)',
-          }}
-        >
-          <ContextSizeControl
-            contextWindow={contextWindow}
-            useSettings={useSettings}
-            setSetting={setSetting}
-            unsetSetting={unsetSetting}
-            t={t}
-          />
-        </div>
-      )}
-    </span>
-  )
-}
-
-type ActivityDockProps = PropsRuntime<'conversation.composer.dock'>
-  & PropsLocale<'codex'>
-
-// The component reads only the common session/projection/locale face, so the
-// erased optional-slot registration can also mount it on a future status seat.
-type ActivityProps = ActivityDockProps
+type ActivityProps = Pick<
+  LegacyOverlayProps,
+  'sessionId' | 'useSession' | 'useSessions' | 'useProjection' | 't'
+>
 
 type CodexActivityReader = (key: 'codexActivity') => CodexActivity | null | undefined
 
@@ -381,18 +292,19 @@ export function ActivityLine({ sessionId, useSession, useSessions, useProjection
 
   return (
     <span
-      id="codex-activity"
-      role="status"
+      data-codex-activity
       aria-live="polite"
       style={{
         display: 'inline-flex',
         alignItems: 'center',
         gap: 7,
         minHeight: 26,
+        marginLeft: 10,
         color: 'var(--dsw-alias-label-secondary)',
         fontSize: 12,
         lineHeight: '20px',
         whiteSpace: 'nowrap',
+        WebkitTextFillColor: 'currentColor',
       }}
     >
       <span
@@ -408,18 +320,103 @@ export function ActivityLine({ sessionId, useSession, useSessions, useProjection
       />
       <span>{label}</span>
       <span style={{ color: 'var(--dsw-alias-label-tertiary)' }}>
-        · {elapsedSeconds(activity.startedAt, now)}s
+        {'\u00b7'} {elapsedSeconds(activity.startedAt, now)}s
       </span>
     </span>
   )
 }
 
-/** Preserve the old composer-dock footprint for hosts without the chat status seat. */
-function ActivityDock(props: ActivityDockProps) {
+function findContextMeterDialog(): HTMLElement | null {
+  const buttons = document.querySelectorAll<HTMLButtonElement>(
+    'button[aria-haspopup="dialog"][aria-expanded="true"]',
+  )
+  for (const button of buttons) {
+    if (button.querySelectorAll('circle').length < 2) continue
+    let ancestor: Element | null = button
+    for (let depth = 0; ancestor !== null && depth < 5; depth += 1, ancestor = ancestor.parentElement) {
+      const dialog = ancestor.querySelector<HTMLElement>('[role="dialog"]')
+      if (dialog !== null) return dialog
+    }
+  }
+  return null
+}
+
+function findTurnStatus(): HTMLElement | null {
+  for (const status of document.querySelectorAll<HTMLElement>('[role="status"]')) {
+    if (status.textContent?.includes('Deep diving...') === true
+      && status.closest('[data-chat-flow]') !== null) return status
+  }
+  return null
+}
+
+function useLegacyHostTargets(): {
+  contextDialog: HTMLElement | null
+  turnStatus: HTMLElement | null
+} {
+  const [targets, setTargets] = useState<{
+    contextDialog: HTMLElement | null
+    turnStatus: HTMLElement | null
+  }>({ contextDialog: null, turnStatus: null })
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || document.body === null) return undefined
+    const refresh = (): void => {
+      const next = {
+        contextDialog: findContextMeterDialog(),
+        turnStatus: findTurnStatus(),
+      }
+      setTargets(current => current.contextDialog === next.contextDialog
+        && current.turnStatus === next.turnStatus ? current : next)
+    }
+    refresh()
+    const observer = new MutationObserver(refresh)
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['aria-expanded'],
+    })
+    return () => observer.disconnect()
+  }, [])
+  return targets
+}
+
+/** Bridges plugin UI into DOM sites rendered by the legacy conversation host. */
+function LegacyOverlay(props: LegacyOverlayProps) {
+  const {
+    sessionId, useSession, useSessions, useProjection, useSettings, setSetting, unsetSetting, t,
+  } = props
+  const { contextDialog, turnStatus } = useLegacyHostTargets()
+  const contextWindow = contextWindowFromProjection(useProjection)
+  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
+  if (!isCodexPresetId(agentPreset)) return null
   return (
-    <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, padding: '4px 10px' }}>
-      <ActivityLine {...props} />
-    </div>
+    <>
+      {contextDialog !== null && createPortal(
+        <ContextSizeControl
+          contextWindow={contextWindow}
+          sessionId={sessionId}
+          useSessions={useSessions}
+          useSettings={useSettings}
+          setSetting={setSetting}
+          unsetSetting={unsetSetting}
+          t={t}
+        />,
+        contextDialog,
+        'codex-context-size',
+      )}
+      {turnStatus !== null && createPortal(
+        <ActivityLine
+          sessionId={sessionId}
+          useSession={useSession}
+          useSessions={useSessions}
+          useProjection={useProjection}
+          t={t}
+        />,
+        turnStatus,
+        'codex-activity',
+      )}
+    </>
   )
 }
 
@@ -441,19 +438,13 @@ export function apply(ctx: Context): void {
     locale: NS,
     inject: injected,
   }, FastModeFallback))
-  ctx.slots.inject(CONTEXT_FALLBACK_SLOT, () => ctx.slots.register({
-    name: CONTEXT_FALLBACK_SLOT,
-    id: 'codex-context-size',
-    order: 1,
+  ctx.slots.inject(LEGACY_OVERLAY_SLOT, () => ctx.slots.register({
+    name: LEGACY_OVERLAY_SLOT,
+    id: 'codex-legacy-overlay',
+    order: 0,
     locale: NS,
     inject: injected,
-  }, LegacyContextSizeControl))
-  ctx.slots.inject(ACTIVITY_FALLBACK_SLOT, () => ctx.slots.register({
-      name: ACTIVITY_FALLBACK_SLOT,
-      id: 'codex-activity',
-      order: 5,
-      locale: NS,
-    }, ActivityDock))
+  }, LegacyOverlay))
 }
 
 export default { inject, apply }

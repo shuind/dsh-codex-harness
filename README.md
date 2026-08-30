@@ -9,7 +9,7 @@
 - **后台任务**：`exec_command` 支持 `run_in_background: true`，立即返回 DSH `job_id`；使用 `job_output` 读取输出、`job_kill` 停止任务。任务完成时，忙碌中的 agent 会在下一步收到 inbox 注入；空闲 agent 默认保持安静，等下一次唤醒时再处理完成消息。
 - **GPT 能力补全**：为 GPT 系列模型补充图片输入和思考强度选项；不会覆盖用户已有的显式配置。
 - **Fast**：仅在 Codex preset 的模型选择菜单中显示，开启后向 Responses 请求发送 `service_tier: "priority"`。
-- **旧版 Web 兼容**：在未提供新版模型设置/上下文设置 slot 的 DSH Web 中，Fast 和上下文容量会自动回退到旧版 composer inline slot；上下文容量使用紧凑按钮和弹层，不占用整行；client 注入不依赖纯类型 slot 包。
+- **Legacy Web compatibility**: The plugin uses only slots present in the legacy host. The context-size control is appended to the host context-usage popup, and the activity line is appended beside `Deep diving...`; no host upgrade is required.
 - **Responses 原生 apply_patch**：在 GPT Responses 请求的插件传输边界，把普通 JSON function tool 改写为 `type: "custom"` + OpenAI `lark` grammar；下一轮历史同步改写为 `custom_tool_call`。如果中转站拒绝 custom tool，则自动回退到普通 function tool，不改变 DSH 工具执行器。
 - **远程搜索与压缩**：OpenAI Responses 请求默认优先使用 hosted `web_search` 和 `/responses/compact`；失败时回退到 DSH 的本地实现。
 - **远程压缩用量**：`/responses/compact` 返回标准 `usage` 时，插件会把 `input_tokens`、缓存读写和 `output_tokens` 原样拆分为 DSH 的用量字段；不再把远程压缩伪造成 `0`。中转站缺失或返回不一致的 usage 时，插件不会编造数字。
@@ -20,7 +20,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.29
+dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.34
 ```
 
 重启 Web，创建新会话，在模式菜单中选择 **Codex 模式**。
@@ -123,7 +123,7 @@ order: 10
 开启后，Codex preset 会在系统提示词中注入以下协作要求：
 
 ```text
-Gather enough context from the user then achieve the user's goal through the clearest, most effective path.
+Ask, align, and clarify first. Gather enough context from the user, then align the approach to achieve the user's goal through the clearest, most effective path.
 Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done.
 Convey enough valuable information with as few words as possible. Stay focused on the end goal.
 Solve problems by thinking from first principles and at a higher level.

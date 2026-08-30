@@ -4,7 +4,9 @@ import {
   buildCodexSystemPrompt,
   Config,
   normalizeCodexPromptAssembly,
+  syncCodexContextWindow,
 } from '../src/index.ts'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 
 describe('Codex request settings', () => {
   it('keeps the collaboration prompt off by default and enables it explicitly', () => {
@@ -32,9 +34,8 @@ describe('Codex request settings', () => {
     const collaborationPrompt = buildCodexSystemPrompt({ collaborationPrompt: true })
     expect(collaborationPrompt).toContain('## Collaboration')
     expect(collaborationPrompt).toContain(
-      "Gather enough context from the user then achieve the user's goal through the clearest, most effective path.",
+      "Ask, align, and clarify first. Gather enough context from the user, then align the approach to achieve the user's goal through the clearest, most effective path.",
     )
-    expect(collaborationPrompt).not.toContain('Ask, align, and clarify first.')
     expect(collaborationPrompt).not.toContain('Gather more context from the user.')
     expect(collaborationPrompt).not.toContain('Make things as effortless as possible for the user.')
   })
@@ -96,5 +97,24 @@ describe('Codex request settings', () => {
       provider: 'relay',
       model: 'deepseek-chat',
     })
+  })
+
+  it('feeds the live context override into the official context projection', () => {
+    const session = Session.create(SessionId('codex-context-projection'))
+    session.append('turn/start', { turn: 1 })
+    session.append('request/header', {
+      header: { config: { provider: 'relay', model: 'gpt-5.4' } },
+      reason: 'initial',
+    })
+
+    syncCodexContextWindow(session, 400_000)
+    expect(session.requestContext()).toEqual({
+      provider: 'relay',
+      model: 'gpt-5.4',
+      contextWindow: 400_000,
+    })
+    const eventCount = session.events.length
+    syncCodexContextWindow(session, 400_000)
+    expect(session.events).toHaveLength(eventCount)
   })
 })

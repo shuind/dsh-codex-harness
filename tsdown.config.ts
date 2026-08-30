@@ -3,7 +3,7 @@ import { defineConfig } from 'tsdown'
 // DSH's browser module table owns these identities. Bundling either one would
 // give slot components a second React runtime and make their Hooks invalid in
 // the host renderer.
-const CLIENT_EXTERNALS = new Set(['react', 'react/jsx-runtime'])
+const CLIENT_EXTERNALS = new Set(['react', 'react/jsx-runtime', 'react-dom'])
 
 /** Build the public entry point and invariant companion from TypeScript output. */
 export default defineConfig([
