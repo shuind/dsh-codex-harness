@@ -71,6 +71,8 @@
   config:
     - id: compaction-basic
       name: '@shuind/dsh-codex-harness/compaction'
+      config:
+        thresholdRatio: 0.95
 
     - id: command-compact
       name: '@deepseek-ai/dsh-command-compact'

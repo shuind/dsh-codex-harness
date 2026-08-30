@@ -114,10 +114,10 @@ describe('Codex compaction context capacity', () => {
     expect(compactRegion).not.toHaveBeenCalled()
   })
 
-  it('uses 320K as the pressure threshold for a 400K request context', async () => {
+  it('uses 380K as the pressure threshold for a 400K request context', async () => {
     const ctx = new Context()
     const session = sessionWithDurableContext(400_000)
-    let totalTokens = 321_000
+    let totalTokens = 381_000
     const resolveModelInfo = vi.fn(async (): Promise<LlmResolvedModelInfo> => ({
       provider: PROVIDER,
       id: MODEL,
@@ -127,7 +127,11 @@ describe('Codex compaction context capacity', () => {
     ctx.provide('llm', { resolveModelInfo } as never)
     ctx.provide('tokenMeter', { measure: () => pressureMeasurement(session, totalTokens) } as never)
 
-    const compact = new CodexCompactionEngine(ctx, { auto: false, compactionRetries: 0 })
+    const compact = new CodexCompactionEngine(ctx, {
+      auto: false,
+      compactionRetries: 0,
+      thresholdRatio: 0.95,
+    })
     const compactRegion = vi.spyOn(compact, 'compactRegion').mockImplementation(async () => {
       totalTokens = 0
       return {} as never

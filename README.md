@@ -15,13 +15,13 @@
 - **远程搜索与压缩**：OpenAI Responses 请求默认优先使用 hosted `web_search` 和 `/responses/compact`；失败时回退到 DSH 的本地实现。
 - **远程压缩用量**：`/responses/compact` 返回标准 `usage` 时，插件会把 `input_tokens`、缓存读写和 `output_tokens` 原样拆分为 DSH 的用量字段；不再把远程压缩伪造成 `0`。中转站缺失或返回不一致的 usage 时，插件不会编造数字。
 - **上下文容量**：在 Web 中设置 `1K`–`1000K` tokens，设置值作用于下一次请求。
-- **自动压缩阈值**：Codex preset 的自动压缩会读取最新请求持久化的有效上下文容量；例如设置 `400K` 时，默认 `80%` pressure threshold 是 `320K`，不会错误地按适配器默认 `262,144` 在约 `210K` 提前触发。
+- **自动压缩阈值**：Codex preset 的自动压缩会读取最新请求持久化的有效上下文容量，并在 `95%` pressure threshold 触发；例如设置 `400K` 时阈值是 `380K`，不会错误地按适配器默认 `262,144` 在约 `210K` 提前触发。
 - **活动状态**：Codex 请求模型、接收模型回复或进行上下文压缩时，在 `Deep diving...` 右侧显示对应阶段和耗时，让长时间 Deep Diving 不再像卡住。
 
 ## 安装
 
 ```sh
-dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.38
+dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.39
 ```
 
 重启 Web，创建新会话，在模式菜单中选择 **Codex 模式**。

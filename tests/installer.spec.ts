@@ -26,6 +26,7 @@ describe('Codex preset installer', () => {
       expect(composition).toContain("name: '@deepseek-ai/dsh-tool-todo'")
       expect(composition).toContain("name: '@deepseek-ai/dsh-tool-web'")
       expect(composition).toContain("name: '@shuind/dsh-codex-harness/compaction'")
+      expect(composition).toContain('thresholdRatio: 0.95')
       expect(composition).toContain("name: '@deepseek-ai/dsh-command-compact'")
 
       const custom = 'name: user-owned\n'
