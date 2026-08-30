@@ -21,7 +21,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.37
+dsh plugin --profile web add @shuind/dsh-codex-harness@0.1.38
 ```
 
 重启 Web，创建新会话，在模式菜单中选择 **Codex 模式**。
@@ -124,9 +124,10 @@ order: 10
 开启后，Codex preset 会在系统提示词中注入以下协作要求：
 
 ```text
+## Working principles
+
 Ask, align, and clarify first. Gather enough context from the user, then align the approach to achieve the user's goal through the clearest, most effective path.
-Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done.
-Convey enough valuable information with as few words as possible. Stay focused on the end goal.
+Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done, especially when writing documentation or communicating. Convey enough valuable information with as few words as possible.
 Solve problems by thinking from first principles and at a higher level.
 ```
 

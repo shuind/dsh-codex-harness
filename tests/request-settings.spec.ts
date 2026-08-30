@@ -16,7 +16,7 @@ describe('Codex request settings', () => {
     const prompt = buildCodexSystemPrompt()
     expect(prompt).toMatch(/^## General/)
     expect(prompt).not.toContain('You are Codex')
-    expect(prompt).not.toContain('## Collaboration')
+    expect(prompt).not.toContain('## Working principles')
     expect(prompt).toContain(
       'For substantial work, explain what changed and why, then briefly note how the work was verified and what comes next.',
     )
@@ -36,9 +36,12 @@ describe('Codex request settings', () => {
 
     expect(Config({ collaborationPrompt: true }).collaborationPrompt).toBe(true)
     const collaborationPrompt = buildCodexSystemPrompt({ collaborationPrompt: true })
-    expect(collaborationPrompt).toContain('## Collaboration')
+    expect(collaborationPrompt).toContain('## Working principles')
     expect(collaborationPrompt).toContain(
       "Ask, align, and clarify first. Gather enough context from the user, then align the approach to achieve the user's goal through the clearest, most effective path.",
+    )
+    expect(collaborationPrompt).toContain(
+      "Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done, especially when writing documentation or communicating. Convey enough valuable information with as few words as possible.",
     )
     expect(collaborationPrompt).not.toContain('Gather more context from the user.')
     expect(collaborationPrompt).not.toContain('Make things as effortless as possible for the user.')

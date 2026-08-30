@@ -1,6 +1,6 @@
 {
   "name": "@shuind/dsh-codex-harness",
-  "version": "0.1.37",
+  "version": "0.1.38",
   "description": "A Codex harness with a streamlined system prompt for GPT models that do not fit DSH's native interface, while remaining compatible with the DSH plugin ecosystem.",
   "type": "module",
   "main": "lib/index.js",
