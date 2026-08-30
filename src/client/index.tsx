@@ -1,4 +1,4 @@
-/** Browser controls for the Codex request settings mounted by the Host plugin. */
+/** Browser controls for Codex requests and the editable operating prompt. */
 
 import { useEffect, useLayoutEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -11,6 +11,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { CODEX_CONTEXT_MAX, CODEX_CONTEXT_UNIT, isCodexPresetId } from '../context.ts'
+import { DEFAULT_CODEX_SYSTEM_PROMPT } from '../prompt.ts'
 import type { CodexActivity } from '../activity-types.ts'
 import { modelActivity, sameModelActivity } from './activity.ts'
 
@@ -18,11 +19,13 @@ const NS = 'codex' as const
 const SETTINGS_NAMESPACE = 'codex'
 const FAST_FALLBACK_SLOT = 'conversation.input.right' as const
 const LEGACY_OVERLAY_SLOT = 'conversation.input.overlay' as const
+const PLUGIN_SETTINGS_SLOT = 'settings.plugin.item' as const
 const DEFAULT_CONTEXT_WINDOW = 262_144
 
 interface CodexSettings {
   fast: boolean
   contextWindow?: number
+  systemPrompt?: string
 }
 
 type CodexScope = SettingsScope<CodexSettings>
@@ -36,6 +39,20 @@ const en = {
   contextSize: 'Context size',
   contextSizeDescription: 'Next request capacity in K tokens.',
   contextRestore: 'Restore model default',
+  promptCardTitle: 'Codex Harness',
+  promptCardDescription: 'View and customize the complete Codex operating prompt.',
+  promptLabel: 'System prompt',
+  promptHint: 'This is the full prompt owned by this plugin. Persona and DSH tool guidance stay dynamic.',
+  promptOverridden: 'Overridden',
+  promptReset: 'Restore default',
+  promptUnsaved: 'Unsaved',
+  promptDiscard: 'Discard',
+  promptSave: 'Save',
+  promptSaving: 'Saving...',
+  promptSaveFailed: 'Could not save the prompt.',
+  promptExpand: 'Expand settings',
+  promptCollapse: 'Collapse settings',
+  promptReadOnly: 'This settings document is read-only.',
   activityCompacting: 'Compacting context...',
   activityRequestingModel: 'Requesting model...',
   activityModelReply: 'Model replying...',
@@ -50,6 +67,20 @@ const zh = {
   contextSize: '\u4e0a\u4e0b\u6587\u5927\u5c0f',
   contextSizeDescription: '\u8bbe\u7f6e\u4e0b\u6b21\u8bf7\u6c42\u7684\u4e0a\u4e0b\u6587\u5bb9\u91cf\uff0c\u5355\u4f4d\u4e3a K tokens\u3002',
   contextRestore: '\u6062\u590d\u6a21\u578b\u9ed8\u8ba4\u503c',
+  promptCardTitle: 'Codex Harness',
+  promptCardDescription: '\u67e5\u770b\u548c\u81ea\u5b9a\u4e49\u5b8c\u6574\u7684 Codex \u7cfb\u7edf\u63d0\u793a\u8bcd\u3002',
+  promptLabel: '\u7cfb\u7edf\u63d0\u793a\u8bcd',
+  promptHint: '\u8fd9\u662f\u672c\u63d2\u4ef6\u8d1f\u8d23\u7684\u5168\u90e8\u63d0\u793a\u8bcd\uff1bPersona \u548c DSH \u5de5\u5177\u6307\u5bfc\u4ecd\u4f1a\u52a8\u6001\u6ce8\u5165\u3002',
+  promptOverridden: '\u5df2\u8986\u76d6',
+  promptReset: '\u6062\u590d\u9ed8\u8ba4',
+  promptUnsaved: '\u672a\u4fdd\u5b58',
+  promptDiscard: '\u653e\u5f03',
+  promptSave: '\u4fdd\u5b58',
+  promptSaving: '\u4fdd\u5b58\u4e2d...',
+  promptSaveFailed: '\u63d0\u793a\u8bcd\u4fdd\u5b58\u5931\u8d25\u3002',
+  promptExpand: '\u5c55\u5f00\u8bbe\u7f6e',
+  promptCollapse: '\u6536\u8d77\u8bbe\u7f6e',
+  promptReadOnly: '\u5f53\u524d\u8bbe\u7f6e\u6587\u4ef6\u4e3a\u53ea\u8bfb\u3002',
   activityCompacting: '\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587...',
   activityRequestingModel: '\u8bf7\u6c42\u4e2d...',
   activityModelReply: '\u56de\u590d\u4e2d...',
@@ -67,6 +98,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       scope: 'session'
       owner: Record<never, never>
     }
+    'settings.plugin.item': {
+      kind: 'keyed'
+      scope: 'root'
+      owner: { children?: never }
+    }
   }
 }
 
@@ -74,6 +110,211 @@ interface InputSettingsControlInjected {
   hooks: { settings: HostObservable<ReturnType<CodexScope['getSnapshot']>> }
   setSetting: (field: string, value: unknown) => Promise<void>
   unsetSetting: (field: string) => Promise<void>
+}
+
+function promptFromLayer(layer: unknown): string | undefined {
+  if (typeof layer !== 'object' || layer === null || Array.isArray(layer)) return undefined
+  const value = (layer as Record<string, unknown>)['systemPrompt']
+  return typeof value === 'string' ? value : undefined
+}
+
+function hasPromptOverride(layer: unknown): boolean {
+  return typeof layer === 'object'
+    && layer !== null
+    && !Array.isArray(layer)
+    && Object.hasOwn(layer, 'systemPrompt')
+}
+
+/** Full-prompt editor contributed to Settings > Plugins. */
+export function PromptSettingsCard(
+  props: PropsRuntime<'settings.plugin.item'>
+    & InjectFace<InputSettingsControlInjected>
+    & PropsLocale<'codex'>,
+) {
+  const { useSettings, setSetting, unsetSetting, t } = props
+  const snapshot = useSettings(state => state as {
+    status: 'loading' | 'ready' | 'unavailable'
+    value?: CodexSettings
+    base?: unknown
+    user?: unknown
+    writable: boolean
+  })
+  const current = snapshot.value?.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT
+  const inherited = promptFromLayer(snapshot.base) ?? DEFAULT_CODEX_SYSTEM_PROMPT
+  const overridden = hasPromptOverride(snapshot.user)
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => { setDraft(current) }, [current])
+  if (snapshot.status === 'unavailable') return null
+
+  const dirty = draft !== current
+  const save = async (): Promise<void> => {
+    setSaving(true)
+    setFailed(false)
+    try {
+      await setSetting('systemPrompt', draft)
+    } catch {
+      setFailed(true)
+    } finally {
+      setSaving(false)
+    }
+  }
+  const reset = async (): Promise<void> => {
+    setSaving(true)
+    setFailed(false)
+    setDraft(inherited)
+    try {
+      await unsetSetting('systemPrompt')
+    } catch {
+      setFailed(true)
+      setDraft(current)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <li style={{
+      listStyle: 'none',
+      border: '1px solid var(--dsw-alias-border-l2)',
+      borderRadius: 12,
+      background: open ? 'var(--dsw-alias-bg-layer-2)' : 'var(--dsw-alias-bg-layer-3)',
+      overflow: 'hidden',
+    }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={`${t(open ? 'promptCollapse' : 'promptExpand')}: ${t('promptCardTitle')}`}
+        onClick={() => { setOpen(!open) }}
+        style={{
+          width: '100%',
+          border: 0,
+          background: 'none',
+          color: 'inherit',
+          padding: '14px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          textAlign: 'left',
+          cursor: 'pointer',
+          font: 'inherit',
+        }}
+      >
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <strong style={{ fontSize: 15, lineHeight: 1.4 }}>{t('promptCardTitle')}</strong>
+          <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 13, lineHeight: 1.5 }}>
+            {t('promptCardDescription')}
+          </span>
+        </span>
+        {dirty && (
+          <span style={{
+            borderRadius: 999,
+            padding: '1px 8px',
+            background: 'var(--dsw-alias-bg-module-platform)',
+            color: 'var(--dsw-alias-label-secondary)',
+            fontSize: 11,
+          }}>
+            {t('promptUnsaved')}
+          </span>
+        )}
+        <span aria-hidden="true" style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 16 }}>
+          {open ? '-' : '+'}
+        </span>
+      </button>
+      {open && (
+        <div style={{ borderTop: '1px solid var(--dsw-alias-border-l2)', margin: '0 16px', padding: '12px 0' }}>
+          {!snapshot.writable && (
+            <p style={{ margin: '0 0 10px', color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
+              {t('promptReadOnly')}
+            </p>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+            <label htmlFor="codex-system-prompt" style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>
+              {t('promptLabel')}
+            </label>
+            {overridden && (
+              <>
+                <span style={{
+                  borderRadius: 999,
+                  padding: '1px 8px',
+                  background: 'var(--dsw-alias-bg-module-platform)',
+                  color: 'var(--dsw-alias-label-secondary)',
+                  fontSize: 11,
+                }}>
+                  {t('promptOverridden')}
+                </span>
+                <button
+                  type="button"
+                  disabled={!snapshot.writable || saving}
+                  onClick={() => { void reset() }}
+                  style={{ border: 0, background: 'none', color: 'var(--dsw-alias-label-secondary)', font: 'inherit', fontSize: 12, cursor: 'pointer' }}
+                >
+                  {t('promptReset')}
+                </button>
+              </>
+            )}
+          </div>
+          <textarea
+            id="codex-system-prompt"
+            value={draft}
+            disabled={!snapshot.writable || saving}
+            onChange={event => { setDraft(event.target.value) }}
+            spellCheck={false}
+            style={{
+              boxSizing: 'border-box',
+              width: '100%',
+              minHeight: 320,
+              resize: 'vertical',
+              padding: 12,
+              border: '1px solid var(--dsw-alias-border-l2)',
+              borderRadius: 8,
+              background: 'var(--dsw-alias-bg-layer-3)',
+              color: 'var(--dsw-alias-label-primary)',
+              fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+              fontSize: 12,
+              lineHeight: 1.55,
+            }}
+          />
+          <p style={{ margin: '6px 0 12px', color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
+            {t('promptHint')}
+          </p>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: 8,
+            paddingTop: 12,
+            borderTop: '1px solid var(--dsw-alias-border-l2)',
+          }}>
+            {failed && (
+              <span role="status" style={{ flex: 1, color: 'var(--dsw-alias-label-error)', fontSize: 12 }}>
+                {t('promptSaveFailed')}
+              </span>
+            )}
+            <button
+              type="button"
+              disabled={!dirty || saving}
+              onClick={() => { setDraft(current); setFailed(false) }}
+              style={{ border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'none', color: 'inherit', padding: '5px 14px', font: 'inherit', cursor: 'pointer' }}
+            >
+              {t('promptDiscard')}
+            </button>
+            <button
+              type="button"
+              disabled={!snapshot.writable || !dirty || saving}
+              onClick={() => { void save() }}
+              style={{ border: 0, borderRadius: 8, background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)', padding: '6px 14px', font: 'inherit', cursor: 'pointer' }}
+            >
+              {saving ? t('promptSaving') : t('promptSave')}
+            </button>
+          </div>
+        </div>
+      )}
+    </li>
+  )
 }
 
 /** The legacy composer seat is a compact inline row, not a menu panel. */
@@ -480,7 +721,7 @@ function LegacyOverlay(props: LegacyOverlayProps) {
 
 export const inject = ['slots', 'locale', 'settingsScope']
 
-/** Mount all controls through the official composer seats shared by every DSH release. */
+/** Mount request controls and the plugin settings card through shared slots. */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'codex client: dictionaries')
   const settings = ctx.settingsScope.bind<CodexSettings>({ namespace: SETTINGS_NAMESPACE })
@@ -503,6 +744,12 @@ export function apply(ctx: Context): void {
     locale: NS,
     inject: injected,
   }, LegacyOverlay))
+  ctx.slots.inject(PLUGIN_SETTINGS_SLOT, () => ctx.slots.register({
+    name: PLUGIN_SETTINGS_SLOT,
+    key: SETTINGS_NAMESPACE,
+    locale: NS,
+    inject: injected,
+  }, PromptSettingsCard))
 }
 
 export default { inject, apply }

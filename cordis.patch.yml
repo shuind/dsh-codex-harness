@@ -1,6 +1,6 @@
 - insert:
     # The bundle is host-plane installation only. The Codex tool/prompt row
-    # lives in presets/codex/agent.cordis.yml, so other presets stay unchanged.
+    # lives in the bundled agent preset, so other presets stay unchanged.
     - id: codex-preset-installer
       name: '@shuind/dsh-codex-harness/installer'
     # Register the browser face as part of the bundle. Without this explicit

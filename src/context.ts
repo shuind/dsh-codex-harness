@@ -9,7 +9,7 @@ const CODEX_PRESET_IDS = new Set([
   CODEX_COLLABORATION_PRESET_ID,
 ])
 
-/** Both shipped presets use the same Codex request controls in Web. */
+/** The bundled preset and legacy Codex sessions share the same Web controls. */
 export function isCodexPresetId(value: string | undefined): boolean {
   return value !== undefined && CODEX_PRESET_IDS.has(value)
 }

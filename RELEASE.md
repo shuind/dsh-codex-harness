@@ -41,7 +41,7 @@ npm view @shuind/dsh-codex-harness@<version> version
 ```
 
 `npm publish` runs the package build through `prepare`. Publish only after the
-dry-run contains the current `lib/` files and `presets/codex/`.
+dry-run contains the current `lib/` files and `presets/codex-collaboration/`.
 
 ## Authentication
 

@@ -1,7 +1,7 @@
 {
   "name": "@shuind/dsh-codex-harness",
-  "version": "0.1.40",
-  "description": "A Codex harness with a streamlined system prompt for GPT models that do not fit DSH's native interface, while remaining compatible with the DSH plugin ecosystem.",
+  "version": "0.2.0",
+  "description": "Codex coding preset with customizable prompts and tools for DSH.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -39,7 +39,6 @@
     "lib/types/**/*.d.ts",
     "lib/client.js",
     "cordis.patch.yml",
-    "presets/codex",
     "presets/codex-collaboration",
     "README.md",
     "README.zh.md",
@@ -75,7 +74,8 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
       ],
       "platform": "web"
     }
@@ -91,6 +91,7 @@
     "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-compaction": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-compaction-basic": ">=0.1.0-rc.8",
@@ -131,6 +132,9 @@
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-settings-plugins": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-slots": {

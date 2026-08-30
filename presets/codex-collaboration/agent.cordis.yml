@@ -1,5 +1,5 @@
-# The Codex agent preset. The bundle installs this file into the DSH user
-# preset root on first boot; the tool row is deliberately not global.
+# The single bundled Codex preset. Its complete operating prompt, including
+# the working principles, is editable from Settings > Plugins.
 
 - id: persona
   name: '@deepseek-ai/dsh-persona'
@@ -14,12 +14,10 @@
   config:
     maxBytes: 65536
 
-# This is the complete model-facing Codex layer. It owns the prompt overlay
-# and the four Codex core tool names; execution remains delegated to dsh.
+# The Codex layer owns its prompt overlay and core tool names; execution
+# remains delegated to dsh.
 - id: codex-tools
   name: '@shuind/dsh-codex-harness'
-  config:
-    collaborationPrompt: true
 
 # Background-job guidance and completion delivery belong to the official
 # dsh-tool-jobs plugin. Use wakeup delivery so an idle agent also learns about

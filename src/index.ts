@@ -19,13 +19,21 @@ import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type {} from '@deepseek-ai/dsh-shell'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-terminal'
-import { CODEX_CONTEXT_MAX } from './context.ts'
 import { APPLY_PATCH_DESCRIPTION, applyPatchHunks, parsePatch } from './patch.ts'
 import type { PatchFile } from './patch.ts'
 import { renderExecResult, runExecCommand, runWriteStdin } from './exec.ts'
 import type { ExecCommandArgs, ExecResult, WriteStdinArgs } from './exec.ts'
 import { hostedWebSearchStream, installHostedWebSearch, remoteCompactStream } from './remote.ts'
 import { registerCodexActivityProjection } from './activity.ts'
+import { DEFAULT_CODEX_SYSTEM_PROMPT, resolveCodexSystemPrompt } from './prompt.ts'
+import {
+  CODEX_SETTINGS_ENTRY, CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA,
+} from './settings.ts'
+import type { CodexSettings } from './settings.ts'
+
+export { DEFAULT_CODEX_SYSTEM_PROMPT } from './prompt.ts'
+export { CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA } from './settings.ts'
+export type { CodexSettings } from './settings.ts'
 
 export const name = 'codex'
 export const inject = ['tools', 'systemPrompt', 'shell', 'fs', 'llm', 'credentials', 'settings']
@@ -45,8 +53,8 @@ export interface Config {
   hostedWebSearch?: boolean
   /** Use the provider's /responses/compact endpoint before local compaction. */
   remoteCompact?: boolean
-  /** Inject the optional collaboration guidance into the model system prompt. */
-  collaborationPrompt?: boolean
+  /** Complete plugin-owned Codex operating prompt. */
+  systemPrompt?: string
 }
 
 /** Runtime configuration schema for the Codex tool bridge. */
@@ -57,19 +65,10 @@ export const Config: z<Config> = z.object({
   maxOutputBytes: z.number().step(1).min(1).default(DEFAULT_MAX_OUTPUT_BYTES),
   hostedWebSearch: z.boolean().default(true),
   remoteCompact: z.boolean().default(true),
-  collaborationPrompt: z.boolean().default(false),
+  systemPrompt: z.string().default(DEFAULT_CODEX_SYSTEM_PROMPT),
 })
 
 const LLM_PI_AI_SETTINGS = settingsNamespace('llm-pi-ai')
-/** Live Codex-only request controls shared by the Web controls and agent layer. */
-export const CODEX_SETTINGS_NAMESPACE = settingsNamespace('codex')
-
-export interface CodexSettings {
-  /** Use the Responses priority service tier for GPT requests. */
-  fast: boolean
-  /** Optional context capacity override, in tokens. */
-  contextWindow?: number
-}
 
 /** Plugin-owned extension envelope; official DSH can carry these as unknown fields. */
 export interface CodexRequestConfig extends LlmCallConfig {
@@ -79,12 +78,6 @@ export interface CodexRequestConfig extends LlmCallConfig {
   serviceTier?: string
 }
 
-export const CODEX_SETTINGS_SCHEMA: z<CodexSettings> = z.object({
-  fast: z.boolean().default(false),
-  contextWindow: z.number().step(1).min(1).max(CODEX_CONTEXT_MAX),
-})
-
-const CODEX_SETTINGS_ENTRY: CodexSettings = { fast: false }
 const GPT_REASONING_EFFORTS = {
   low: 'low',
   medium: 'medium',
@@ -199,10 +192,17 @@ function watchConfiguredGptModels(ctx: Context): void {
   schedule()
 }
 
-/** Install the optional settings source used by the request waterfall. */
-function installCodexSettings(ctx: Context): { current: () => CodexSettings } {
-  let source: () => CodexSettings = () => CODEX_SETTINGS_ENTRY
-  installSettingsSection(ctx, CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA, CODEX_SETTINGS_ENTRY, {
+/** Install the optional settings source used by requests and prompt assembly. */
+function installCodexSettings(ctx: Context, systemPrompt: string): { current: () => CodexSettings } {
+  const entry: CodexSettings = { ...CODEX_SETTINGS_ENTRY, systemPrompt }
+  const settings = ctx.get('settings')
+  if (settings?.get(CODEX_SETTINGS_NAMESPACE) !== undefined) {
+    return {
+      current: () => (settings.get(CODEX_SETTINGS_NAMESPACE) as CodexSettings | undefined) ?? entry,
+    }
+  }
+  let source: () => CodexSettings = () => entry
+  installSettingsSection(ctx, CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA, entry, {
     setSource: (current) => { source = current },
     onChange: () => {},
   })
@@ -307,45 +307,6 @@ export function applyCodexRequestSettings(
   }
 }
 
-// The shipped persona owns the single Codex identity line, model, and working directory.
-const CODEX_BASE_PROMPT = String.raw`## General
-
-- When searching for text or files, prefer using rg or rg --files respectively because rg is much faster than alternatives like grep. If rg is not available, use the next best alternative.
-
-## Editing constraints
-
-- Default to ASCII when editing or creating files. Only introduce non-ASCII or other Unicode characters when there is a clear justification and the file already uses them.
-- Add succinct code comments that explain non-obvious code. Do not add comments that merely narrate assignments or control flow.
-- You may be in a dirty git worktree. Never revert existing changes you did not make unless the user explicitly requests it. If unrelated files are changed, leave them alone.
-
-## Planning
-
-- Use update_plan for work with multiple meaningful steps. Keep the plan current as the task progresses.
-- Do not use a plan for a trivial one-step request.
-
-## dsh session
-
-- The user and you share one workspace. Inspect the repository and every applicable AGENTS.md before editing.
-
-## Task execution
-
-- Keep the user informed with concise progress updates and lead with the result.
-
-## Presenting your work
-
-- Be concise, direct, friendly, and actionable.
-- For substantial work, explain what changed and why, then briefly note how the work was verified and what comes next.
-- Do not dump large files into the conversation; refer to their paths.
-- Use plain text with short sections only when they improve scanability.
-`
-
-const CODEX_COLLABORATION_PROMPT = String.raw`## Working principles
-
-- Ask, align, and clarify first. Gather enough context from the user, then align the approach to achieve the user's goal through the clearest, most effective path.
-- Keep only the essential logic and core actions. There's no need to explain or test what was removed or why something wasn't done, especially when writing documentation or communicating. Convey enough valuable information with as few words as possible.
-- Solve problems by thinking from first principles and at a higher level.
-`
-
 /** Put the agent persona first and omit the generic Harness identity opener. */
 export function normalizeCodexPromptAssembly(assembly: PromptAssembly): PromptAssembly {
   const sections = assembly.sections.filter(section => section.name !== 'harness:identity')
@@ -357,11 +318,9 @@ export function normalizeCodexPromptAssembly(assembly: PromptAssembly): PromptAs
   }
 }
 
-/** Build the Codex operating prompt with optional, user-enabled collaboration guidance. */
-export function buildCodexSystemPrompt(config: Pick<Config, 'collaborationPrompt'> = {}): string {
-  return config.collaborationPrompt === true
-    ? `${CODEX_BASE_PROMPT}\n\n${CODEX_COLLABORATION_PROMPT}`
-    : CODEX_BASE_PROMPT
+/** Build the complete plugin-owned prompt, preserving an intentional empty value. */
+export function buildCodexSystemPrompt(config: Pick<Config, 'systemPrompt'> = {}): string {
+  return resolveCodexSystemPrompt(config.systemPrompt)
 }
 
 const EXEC_COMMAND_DESCRIPTION = 'Runs a command in a PTY, returning output, a session ID for ongoing interaction, or a background job ID when requested.'
@@ -680,7 +639,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     maxOutputBytes: config.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
     hostedWebSearch: config.hostedWebSearch ?? true,
     remoteCompact: config.remoteCompact ?? true,
-    collaborationPrompt: config.collaborationPrompt ?? false,
+    systemPrompt: config.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT,
   }
   if (ctx.fs.sandboxMode !== undefined && ctx.get('sandboxPolicy') === undefined) {
     throw new Error('codex: a sandboxing filesystem requires ctx.sandboxPolicy')
@@ -690,7 +649,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // metadata; failed remote operations continue through the generic path.
   watchConfiguredGptModels(ctx)
   registerCodexActivityProjection(ctx)
-  const codexSettings = installCodexSettings(ctx)
+  const codexSettings = installCodexSettings(ctx, resolved.systemPrompt)
   installCodexContextProjection(ctx, codexSettings.current)
   // Keep these controls in the request config rather than mutating provider
   // settings. That makes a change apply to the next step without rebuilding
@@ -717,7 +676,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   }) as any)
   ctx.on('system-prompt/assemble', async (_assembly, _context, next) =>
     normalizeCodexPromptAssembly(await next()))
-  ctx.systemPrompt.section({ name: 'codex:base', order: 10, text: buildCodexSystemPrompt(resolved) })
+  ctx.systemPrompt.section({
+    name: 'codex:base',
+    order: 10,
+    text: () => resolveCodexSystemPrompt(codexSettings.current().systemPrompt),
+  })
   registerExecTools(ctx, resolved)
   registerPatchTool(ctx)
   registerPlanTool(ctx)

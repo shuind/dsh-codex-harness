@@ -3,7 +3,7 @@ import { apply } from '../src/client/index.tsx'
 import { isCodexPresetId } from '../src/context.ts'
 
 describe('Codex client settings', () => {
-  it('mounts through official composer seats only', () => {
+  it('mounts the composer controls and plugin settings card through shared slots', () => {
     const injected: string[] = []
     apply({
       effect: () => undefined,
@@ -21,10 +21,11 @@ describe('Codex client settings', () => {
     expect(injected).toEqual([
       'conversation.input.right',
       'conversation.input.overlay',
+      'settings.plugin.item',
     ])
   })
 
-  it('recognizes both shipped Codex presets', () => {
+  it('recognizes the bundled preset and legacy Codex sessions', () => {
     expect(isCodexPresetId('codex')).toBe(true)
     expect(isCodexPresetId('codex-collaboration')).toBe(true)
     expect(isCodexPresetId('standard')).toBe(false)
