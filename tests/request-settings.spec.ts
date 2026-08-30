@@ -130,6 +130,65 @@ describe('Codex request settings', () => {
     expect(session.events).toHaveLength(eventCount)
   })
 
+  it('waits for request context publication before appending the projection override', async () => {
+    const session = Session.create(SessionId('codex-context-event'))
+    session.append('turn/start', { turn: 1 })
+    session.append('request/header', {
+      header: { config: { provider: 'relay', model: 'gpt-5.4' } },
+      reason: 'initial',
+    })
+    session.append('request/context', {
+      provider: 'relay',
+      model: 'gpt-5.4',
+      contextWindow: 262_144,
+    })
+
+    const listeners = new Map<string, Array<(...args: any[]) => void>>()
+    const ctx = {
+      fs: { sandboxMode: undefined },
+      get: () => undefined,
+      on: (name: string, listener: (...args: any[]) => void) => {
+        const entries = listeners.get(name) ?? []
+        entries.push(listener)
+        listeners.set(name, entries)
+        return () => {}
+      },
+      inject: (services: string[], callback: (ctx: any) => void) => {
+        if (!services.includes('settings')) return
+        callback({
+          settings: {
+            register: () => ({
+              get: () => ({ fast: false, contextWindow: 400_000 }),
+              watch: () => {},
+            }),
+          },
+          effect: () => {},
+        })
+      },
+      systemPrompt: { section: () => {} },
+      tools: { register: () => {} },
+    } as never
+
+    apply(ctx)
+    session.append('request/context', {
+      provider: 'relay',
+      model: 'gpt-5.4',
+      contextWindow: 262_144,
+    })
+    const adapterContext = session.requestContext()
+    for (const listener of listeners.get('session/event') ?? []) {
+      listener(session, session.events.at(-1))
+    }
+
+    expect(session.requestContext()).toBe(adapterContext)
+    await new Promise<void>(resolve => { queueMicrotask(resolve) })
+    expect(session.requestContext()).toEqual({
+      provider: 'relay',
+      model: 'gpt-5.4',
+      contextWindow: 400_000,
+    })
+  })
+
   it('refreshes an open session when the resolved Codex setting changes', () => {
     const session = Session.create(SessionId('codex-context-setting-update'))
     session.append('turn/start', { turn: 1 })

@@ -251,12 +251,25 @@ function installCodexContextProjection(ctx: Context, current: () => CodexSetting
   const sync = (session: Session, contextWindow = current().contextWindow): void => {
     syncCodexContextWindow(session, contextWindow)
   }
+  const pending = new WeakSet<Session>()
+  const syncAfterPublication = (session: Session): void => {
+    if (pending.has(session)) return
+    pending.add(session)
+    queueMicrotask(() => {
+      try {
+        sync(session)
+      } finally {
+        pending.delete(session)
+      }
+    })
+  }
   const syncAll = (contextWindow = current().contextWindow): void => {
     const sessions = ctx.get('sessions') as { list?: () => readonly Session[] } | undefined
     for (const session of sessions?.list?.() ?? []) sync(session, contextWindow)
   }
   ctx.on('session/event', (session, event) => {
-    if (event.type === 'request/header' || event.type === 'request/context') sync(session)
+    // Session.append() rejects nested appends until every observer returns.
+    if (event.type === 'request/header' || event.type === 'request/context') syncAfterPublication(session)
   })
   // Restored sessions may already contain their request/header seed, so no
   // session/event is emitted for the initial capacity. Catch them at the
