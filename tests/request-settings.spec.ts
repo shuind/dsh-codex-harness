@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   apply,
+  applyCodexCapabilitySettings,
   applyCodexRequestSettings,
   buildCodexSystemPrompt,
   CODEX_SETTINGS_NAMESPACE,
@@ -9,6 +10,7 @@ import {
   syncCodexContextWindow,
 } from '../src/index.ts'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { CODEX_SETTINGS_ENTRY } from '../src/settings.ts'
 
 describe('Codex request settings', () => {
   it('uses the complete working-principles prompt by default and accepts a full replacement', () => {
@@ -106,6 +108,34 @@ describe('Codex request settings', () => {
       'codex:base',
     ])
     expect(result.sections.map(section => section.text).join('\n')).not.toContain('You are an AI agent powered by DeepSeek Harness.')
+  })
+
+  it('filters disabled Codex capabilities from the next prompt assembly', () => {
+    const assembly = {
+      sections: [
+        { name: 'harness:identity', text: 'Harness' },
+        { name: 'deployment:persona', text: 'Codex' },
+        { name: 'codex:base', text: 'Instructions' },
+      ],
+      contexts: [],
+      tools: [
+        { name: 'exec_command', description: 'exec', parameters: {} },
+        { name: 'write_stdin', description: 'stdin', parameters: {} },
+        { name: 'apply_patch', description: 'patch', parameters: {} },
+        { name: 'update_plan', description: 'plan', parameters: {} },
+        { name: 'web_search', description: 'search', parameters: {} },
+      ],
+      variables: {},
+    }
+    const result = applyCodexCapabilitySettings(assembly, {
+      ...CODEX_SETTINGS_ENTRY,
+      promptEnabled: false,
+      terminalToolsEnabled: false,
+      planToolEnabled: false,
+    })
+
+    expect(result.sections).toEqual(assembly.sections)
+    expect(result.tools.map(tool => tool.name)).toEqual(['apply_patch', 'web_search'])
   })
 
   it('clears stale Codex controls when Fast is off or the route is not GPT', () => {

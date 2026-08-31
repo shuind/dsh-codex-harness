@@ -38,6 +38,13 @@ describe('Codex preset installer', () => {
       expect(registrations[0]?.base).toMatchObject({
         fast: false,
         systemPrompt: expect.stringContaining('## Working principles'),
+        promptEnabled: true,
+        terminalToolsEnabled: true,
+        patchToolEnabled: true,
+        planToolEnabled: true,
+        hostedWebSearchEnabled: true,
+        remoteCompactionEnabled: true,
+        activityIndicatorEnabled: true,
       })
       expect(existsSync(join(root, '.agent-presets', 'codex-collaboration', 'preset.yml'))).toBe(true)
     } finally {
@@ -57,6 +64,8 @@ describe('Codex preset installer', () => {
         .toContain('description: 使用可自定义提示词与 Codex 工具的编码 Agent。')
       const composition = readFileSync(join(target, 'agent.cordis.yml'), 'utf8')
       expect(composition).toContain("name: '@shuind/dsh-codex-harness'")
+      expect(composition).toContain('globalEnhancements: false')
+      expect(composition).toContain('codexCore: true')
       expect(composition).not.toContain('collaborationPrompt')
       expect(composition).toContain("name: '@deepseek-ai/dsh-tool-jobs'")
       expect(composition).toContain('completionDelivery: wakeup')

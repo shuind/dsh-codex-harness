@@ -2,6 +2,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { GenerateOptions, Message, StreamChunk, TokenUsage, ToolSchema } from '@deepseek-ai/dsh-llm'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { APPLY_PATCH_DESCRIPTION, APPLY_PATCH_GRAMMAR } from './patch.ts'
 
 export interface RemoteCodexConfig {
@@ -32,9 +36,14 @@ interface RemoteCompactResult {
 const SETTINGS_NAMESPACE = 'llm-pi-ai'
 const REMOTE_COMPACTION_OPEN = '<codex-remote-compaction>'
 const REMOTE_COMPACTION_CLOSE = '</codex-remote-compaction>'
+const CODEX_ERROR_DIRECTORY = ['diagnostics', 'openai-codex-errors'] as const
 interface CodexRequestWireOptions {
   /** Provider-facing request option preserved by older DSH LLM adapters. */
   serviceTier?: string
+  /** Whether local web_search should become the hosted Responses tool. */
+  hostedWebSearch?: boolean
+  /** Whether apply_patch should use the Responses custom grammar tool. */
+  customApplyPatch?: boolean
 }
 
 const HOSTED_REQUESTS = new AsyncLocalStorage<CodexRequestWireOptions>()
@@ -93,6 +102,82 @@ function isResponsesRequest(url: string): boolean {
   } catch {
     return url.replace(/\/+$/, '').endsWith('/responses')
   }
+}
+
+function diagnosticsDirectory(): string {
+  const configured = process.env['DSH_HOME']?.trim()
+  const expanded = configured === undefined || configured.length === 0
+    ? join(homedir(), '.dsh')
+    : configured === '~'
+      ? homedir()
+      : configured.startsWith('~/') || configured.startsWith('~\\')
+        ? join(homedir(), configured.slice(2))
+        : configured
+  return join(resolve(expanded), ...CODEX_ERROR_DIRECTORY)
+}
+
+function saveCodexErrorPayload(payload: string): void {
+  const directory = diagnosticsDirectory()
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const filename = `${Date.now()}-${randomUUID()}.json`
+  writeFileSync(join(directory, filename), `${payload}\n`, { flag: 'wx', mode: 0o600 })
+}
+
+function errorPayloadFromSseFrame(frame: string): string | undefined {
+  const data = frame
+    .split(/\r?\n/u)
+    .filter(line => line.startsWith('data:'))
+    .map(line => line.slice(5).trimStart())
+    .join('\n')
+    .trim()
+  if (data.length === 0 || data === '[DONE]') return undefined
+  try {
+    const payload = JSON.parse(data) as { type?: unknown }
+    return payload.type === 'error' || payload.type === 'response.failed' ? data : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function captureCodexErrorPayloads(response: Response): Promise<void> {
+  if (response.body === null) return
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      buffer += decoder.decode(value, { stream: !done })
+      while (true) {
+        const delimiter = /\r?\n\r?\n/u.exec(buffer)
+        if (delimiter?.index === undefined) break
+        const frame = buffer.slice(0, delimiter.index)
+        buffer = buffer.slice(delimiter.index + delimiter[0].length)
+        const payload = errorPayloadFromSseFrame(frame)
+        if (payload === undefined) continue
+        try {
+          saveCodexErrorPayload(payload)
+        } catch {
+          // Diagnostics must never replace the provider response or failure.
+        }
+      }
+      if (done) return
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+function captureCodexErrors(response: Response): Response {
+  if (!response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) return response
+  try {
+    void captureCodexErrorPayloads(response.clone()).catch(() => {
+      // Reading the diagnostic branch must not affect the provider stream.
+    })
+  } catch {
+    // An already-consumed response remains usable by its original consumer.
+  }
+  return response
 }
 
 function isWebSearchTool(tool: unknown): boolean {
@@ -240,14 +325,19 @@ export function rewriteCodexApplyPatchHistory(body: JsonObject): JsonObject {
 }
 
 /** Compose the plugin-only Responses rewrites without changing DSH's tool API. */
-export function rewriteCodexResponsesBody(body: JsonObject): JsonObject {
+export function rewriteCodexResponsesBody(
+  body: JsonObject,
+  options: Pick<CodexRequestWireOptions, 'hostedWebSearch' | 'customApplyPatch'> = {},
+): JsonObject {
   let next = body
-  if (hasWebSearchTool(next)) {
+  if (options.hostedWebSearch !== false && hasWebSearchTool(next)) {
     next = addHostedWebSearch(next)
   } else if (hasRemoteCompaction(next)) {
     next = replaceRemoteCompactions(next)
   }
-  if (hasFunctionApplyPatchTool(next) && canRewriteApplyPatchHistory(next)) {
+  if (options.customApplyPatch !== false
+    && hasFunctionApplyPatchTool(next)
+    && canRewriteApplyPatchHistory(next)) {
     next = addCodexApplyPatch(next)
     next = rewriteCodexApplyPatchHistory(next)
   }
@@ -301,11 +391,13 @@ function hasRemoteCompaction(body: JsonObject): boolean {
   })
 }
 
-function canPatchBody(body: JsonObject): boolean {
+function canPatchBody(body: JsonObject, options: CodexRequestWireOptions): boolean {
   return isGptModel(body.model)
-    && (hasWebSearchTool(body)
+    && ((options.hostedWebSearch !== false && hasWebSearchTool(body))
       || hasRemoteCompaction(body)
-      || (hasFunctionApplyPatchTool(body) && canRewriteApplyPatchHistory(body)))
+      || (options.customApplyPatch !== false
+        && hasFunctionApplyPatchTool(body)
+        && canRewriteApplyPatchHistory(body)))
 }
 
 /** Add provider options that older pi-ai adapters do not copy themselves. */
@@ -327,19 +419,21 @@ function installGlobalHostedWebSearchPatch(): () => void {
     if (options === undefined) return original(input, init)
     const request = new Request(input, init)
     if (!isResponsesRequest(request.url)) return original(input, init)
+    const requestAndCapture = async (target: RequestInfo | URL, requestInit?: RequestInit): Promise<Response> =>
+      captureCodexErrors(await original(target, requestInit))
 
     let body: JsonObject
     try {
       body = JSON.parse(await request.clone().text()) as JsonObject
     } catch {
-      return original(input, init)
+      return requestAndCapture(input, init)
     }
     const requestBody = applyRequestWireOptions(body, options)
-    if (!canPatchBody(requestBody)) {
-      if (requestBody === body) return original(input, init)
+    if (!canPatchBody(requestBody, options)) {
+      if (requestBody === body) return requestAndCapture(input, init)
       const headers = new Headers(request.headers)
       headers.delete('content-length')
-      return original(new Request(request, {
+      return requestAndCapture(new Request(request, {
         body: JSON.stringify(requestBody),
         headers,
       }))
@@ -356,19 +450,19 @@ function installGlobalHostedWebSearchPatch(): () => void {
     const headers = new Headers(request.headers)
     headers.delete('content-length')
     const hostedRequest = new Request(request, {
-      body: JSON.stringify(rewriteCodexResponsesBody(requestBody)),
+      body: JSON.stringify(rewriteCodexResponsesBody(requestBody, options)),
       headers,
     })
     try {
-      const hostedResponse = await original(hostedRequest)
+      const hostedResponse = await requestAndCapture(hostedRequest)
       // A rejected hosted-tool request is retried with the untouched request so
       // dsh-tool-web can still produce the normal local function-tool path.
-      if (!hostedResponse.ok) return original(fallbackRequest)
+      if (!hostedResponse.ok) return requestAndCapture(fallbackRequest)
       return hostedResponse
     } catch {
       // Network and transport failures must have the same fallback behavior as
       // an HTTP rejection; the local function-tool path remains available.
-      return original(fallbackRequest)
+      return requestAndCapture(fallbackRequest)
     }
   }
 
@@ -471,7 +565,10 @@ function responsesTools(tools: readonly ToolSchema[] | undefined): JsonObject[] 
   }))
 }
 
-function compactBody(options: GenerateOptions): JsonObject {
+function compactBody(
+  options: GenerateOptions,
+  wireOptions: Pick<CodexRequestWireOptions, 'hostedWebSearch'> = {},
+): JsonObject {
   const tools = responsesTools(options.tools)
   const body: JsonObject = {
     model: options.model,
@@ -484,7 +581,10 @@ function compactBody(options: GenerateOptions): JsonObject {
     ...options.reasoningEffort === undefined ? {} : { reasoning: { effort: options.reasoningEffort } },
   }
   const compacted = replaceRemoteCompactions(body)
-  return options.tools?.some(tool => tool.name === 'web_search') ? addHostedWebSearch(compacted) : compacted
+  return wireOptions.hostedWebSearch !== false
+    && options.tools?.some(tool => tool.name === 'web_search')
+    ? addHostedWebSearch(compacted)
+    : compacted
 }
 
 function compactText(body: JsonObject): string {
@@ -530,7 +630,11 @@ function compactUsage(body: JsonObject): TokenUsage | undefined {
   }
 }
 
-async function remoteCompact(ctx: Context, options: GenerateOptions): Promise<RemoteCompactResult> {
+async function remoteCompact(
+  ctx: Context,
+  options: GenerateOptions,
+  wireOptions: Pick<CodexRequestWireOptions, 'hostedWebSearch'> = {},
+): Promise<RemoteCompactResult> {
   const profile = profileOf(ctx, options.provider)
   if (!supportsResponses(profile, options.provider) || profile?.baseURL === undefined) {
     throw new Error('Codex remote compaction requires an OpenAI Responses provider with baseURL')
@@ -540,7 +644,7 @@ async function remoteCompact(ctx: Context, options: GenerateOptions): Promise<Re
   const response = await fetch(responsesEndpoint(profile.baseURL, 'responses/compact'), {
     method: 'POST',
     headers,
-    body: JSON.stringify(compactBody(options)),
+    body: JSON.stringify(compactBody(options, wireOptions)),
     ...options.signal === undefined ? {} : { signal: options.signal },
   })
   if (!response.ok) throw new Error(`remote compaction returned HTTP ${response.status}`)
@@ -556,10 +660,11 @@ export function remoteCompactStream(
   ctx: Context,
   options: GenerateOptions,
   next: () => AsyncIterable<StreamChunk>,
+  wireOptions: CodexRequestWireOptions = {},
 ): AsyncIterable<StreamChunk> {
   return (async function* (): AsyncGenerator<StreamChunk> {
     try {
-      const result = await remoteCompact(ctx, options)
+      const result = await remoteCompact(ctx, options, wireOptions)
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'text-delta', index: 0, text: result.text }
       yield { type: 'block-end', index: 0, block: { type: 'text', text: result.text } }
@@ -572,7 +677,10 @@ export function remoteCompactStream(
       // The local fallback still replays the marker through a later GPT
       // Responses request, so it needs the same scoped wire context.
       const serviceTier = serviceTierOf(options)
-      yield* hostedWebSearchStream(next, serviceTier === undefined ? {} : { serviceTier })
+      yield* hostedWebSearchStream(next, {
+        ...wireOptions,
+        ...serviceTier === undefined ? {} : { serviceTier },
+      })
     }
   })()
 }

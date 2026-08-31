@@ -14,10 +14,14 @@
   config:
     maxBytes: 65536
 
-# The Codex layer owns its prompt overlay and core tool names; execution
-# remains delegated to dsh.
+# The editable Codex operating prompt and its four core tools are available
+# only inside this preset. Global request enhancements are mounted by the
+# bundle row and must not be installed twice in this agent scope.
 - id: codex-tools
   name: '@shuind/dsh-codex-harness'
+  config:
+    globalEnhancements: false
+    codexCore: true
 
 # Background-job guidance and completion delivery belong to the official
 # dsh-tool-jobs plugin. Use wakeup delivery so an idle agent also learns about
@@ -28,8 +32,8 @@
     completionDelivery: wakeup
 
 # The generic DSH pi-ai adapter still owns the user's configured provider,
-# endpoint, API key, and model. Codex's remote-first transport wrapper is
-# installed only in this Codex scope and falls back to the generic DSH path.
+# endpoint, API key, and model. The global Codex capability layer owns the
+# optional remote-first transport wrapper and falls back to the generic path.
 
 # Keep the local tool mounted as the fallback. Codex rewrites the final GPT
 # Responses request to a hosted web_search tool first; a failed remote request

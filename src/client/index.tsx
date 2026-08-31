@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import { CODEX_CONTEXT_MAX, CODEX_CONTEXT_UNIT, isCodexPresetId } from '../context.ts'
+import { CODEX_CONTEXT_MAX, CODEX_CONTEXT_UNIT } from '../context.ts'
 import { DEFAULT_CODEX_SYSTEM_PROMPT } from '../prompt.ts'
 import type { CodexActivity } from '../activity-types.ts'
 import { modelActivity, sameModelActivity } from './activity.ts'
@@ -26,6 +26,13 @@ interface CodexSettings {
   fast: boolean
   contextWindow?: number
   systemPrompt?: string
+  promptEnabled: boolean
+  terminalToolsEnabled: boolean
+  patchToolEnabled: boolean
+  planToolEnabled: boolean
+  hostedWebSearchEnabled: boolean
+  remoteCompactionEnabled: boolean
+  activityIndicatorEnabled: boolean
 }
 
 type CodexScope = SettingsScope<CodexSettings>
@@ -40,7 +47,22 @@ const en = {
   contextSizeDescription: 'Next request capacity in K tokens.',
   contextRestore: 'Restore model default',
   promptCardTitle: 'Codex Harness',
-  promptCardDescription: 'View and customize the complete Codex operating prompt.',
+  promptCardDescription: 'Choose Codex capabilities and customize the operating prompt.',
+  capabilitiesLabel: 'Codex mode capabilities',
+  capabilityPrompt: 'Codex operating prompt',
+  capabilityPromptHint: 'Inject the editable instructions and persona-first prompt layout in Codex mode.',
+  capabilityTerminal: 'Terminal tools',
+  capabilityTerminalHint: 'Expose exec_command and write_stdin in Codex mode.',
+  capabilityPatch: 'Patch tool',
+  capabilityPatchHint: 'Expose apply_patch in Codex mode, using the native Responses grammar when supported.',
+  capabilityPlan: 'Plan tool',
+  capabilityPlanHint: 'Expose update_plan for implementation task tracking in Codex mode.',
+  capabilityWebSearch: 'Hosted web search',
+  capabilityWebSearchHint: 'Use the provider-native Responses web_search tool when available.',
+  capabilityCompaction: 'Remote compaction',
+  capabilityCompactionHint: 'Prefer the provider Responses compact endpoint before local compaction.',
+  capabilityActivity: 'Activity indicator',
+  capabilityActivityHint: 'Show request, reply, and compaction status beside the conversation.',
   promptLabel: 'System prompt',
   promptHint: 'This is the full prompt owned by this plugin. Persona and DSH tool guidance stay dynamic.',
   promptOverridden: 'Overridden',
@@ -68,7 +90,22 @@ const zh = {
   contextSizeDescription: '\u8bbe\u7f6e\u4e0b\u6b21\u8bf7\u6c42\u7684\u4e0a\u4e0b\u6587\u5bb9\u91cf\uff0c\u5355\u4f4d\u4e3a K tokens\u3002',
   contextRestore: '\u6062\u590d\u6a21\u578b\u9ed8\u8ba4\u503c',
   promptCardTitle: 'Codex Harness',
-  promptCardDescription: '\u67e5\u770b\u548c\u81ea\u5b9a\u4e49\u5b8c\u6574\u7684 Codex \u7cfb\u7edf\u63d0\u793a\u8bcd\u3002',
+  promptCardDescription: '\u9009\u62e9 Codex \u80fd\u529b\u5e76\u81ea\u5b9a\u4e49\u5b8c\u6574\u7684\u64cd\u4f5c\u63d0\u793a\u8bcd\u3002',
+  capabilitiesLabel: 'Codex \u6a21\u5f0f\u80fd\u529b',
+  capabilityPrompt: 'Codex \u64cd\u4f5c\u63d0\u793a\u8bcd',
+  capabilityPromptHint: '\u4ec5\u5728 Codex \u6a21\u5f0f\u6ce8\u5165\u53ef\u7f16\u8f91\u6307\u4ee4\uff0c\u5e76\u5c06 Persona \u653e\u5728\u63d0\u793a\u8bcd\u9996\u4f4d\u3002',
+  capabilityTerminal: '\u7ec8\u7aef\u5de5\u5177',
+  capabilityTerminalHint: '\u4ec5\u5728 Codex \u6a21\u5f0f\u63d0\u4f9b exec_command \u548c write_stdin\u3002',
+  capabilityPatch: '\u8865\u4e01\u5de5\u5177',
+  capabilityPatchHint: '\u4ec5\u5728 Codex \u6a21\u5f0f\u63d0\u4f9b apply_patch\uff0c\u5e76\u5728\u652f\u6301\u65f6\u4f7f\u7528 Responses \u539f\u751f\u8bed\u6cd5\u3002',
+  capabilityPlan: '\u8ba1\u5212\u5de5\u5177',
+  capabilityPlanHint: '\u4ec5\u5728 Codex \u6a21\u5f0f\u63d0\u4f9b update_plan\uff0c\u7528\u4e8e\u8ddf\u8e2a\u5b9e\u65bd\u4efb\u52a1\u3002',
+  capabilityWebSearch: '\u6258\u7ba1\u7f51\u7edc\u641c\u7d22',
+  capabilityWebSearchHint: '\u53ef\u7528\u65f6\u4f7f\u7528\u63d0\u4f9b\u5546\u539f\u751f\u7684 Responses web_search \u5de5\u5177\u3002',
+  capabilityCompaction: '\u8fdc\u7a0b\u4e0a\u4e0b\u6587\u538b\u7f29',
+  capabilityCompactionHint: '\u4f18\u5148\u8c03\u7528\u63d0\u4f9b\u5546\u7684 Responses compact \u7aef\u70b9\uff0c\u5931\u8d25\u65f6\u56de\u9000\u672c\u5730\u538b\u7f29\u3002',
+  capabilityActivity: '\u6d3b\u52a8\u72b6\u6001',
+  capabilityActivityHint: '\u5728\u5bf9\u8bdd\u65c1\u663e\u793a\u8bf7\u6c42\u3001\u56de\u590d\u548c\u538b\u7f29\u72b6\u6001\u3002',
   promptLabel: '\u7cfb\u7edf\u63d0\u793a\u8bcd',
   promptHint: '\u8fd9\u662f\u672c\u63d2\u4ef6\u8d1f\u8d23\u7684\u5168\u90e8\u63d0\u793a\u8bcd\uff1bPersona \u548c DSH \u5de5\u5177\u6307\u5bfc\u4ecd\u4f1a\u52a8\u6001\u6ce8\u5165\u3002',
   promptOverridden: '\u5df2\u8986\u76d6',
@@ -125,6 +162,50 @@ function hasPromptOverride(layer: unknown): boolean {
     && Object.hasOwn(layer, 'systemPrompt')
 }
 
+type BooleanCapabilitySetting = Exclude<
+  keyof CodexSettings,
+  'fast' | 'contextWindow' | 'systemPrompt'
+>
+
+interface CapabilityToggleProps {
+  field: BooleanCapabilitySetting
+  label: string
+  hint: string
+  enabled: boolean
+  disabled: boolean
+  setSetting: (field: string, value: unknown) => Promise<void>
+}
+
+function CapabilityToggle({
+  field, label, hint, enabled, disabled, setSetting,
+}: CapabilityToggleProps) {
+  return (
+    <label style={{
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 12,
+      padding: '9px 0',
+      cursor: disabled ? 'default' : 'pointer',
+    }}>
+      <span style={{ flex: 1, minWidth: 0, display: 'grid', gap: 2 }}>
+        <strong style={{ fontSize: 13, fontWeight: 500 }}>{label}</strong>
+        <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.45 }}>
+          {hint}
+        </span>
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={enabled}
+        disabled={disabled}
+        aria-label={label}
+        onChange={event => { void setSetting(field, event.target.checked) }}
+        style={{ marginTop: 3, accentColor: 'var(--dsw-static-blue-500)' }}
+      />
+    </label>
+  )
+}
+
 /** Full-prompt editor contributed to Settings > Plugins. */
 export function PromptSettingsCard(
   props: PropsRuntime<'settings.plugin.item'>
@@ -142,6 +223,19 @@ export function PromptSettingsCard(
   const current = snapshot.value?.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT
   const inherited = promptFromLayer(snapshot.base) ?? DEFAULT_CODEX_SYSTEM_PROMPT
   const overridden = hasPromptOverride(snapshot.user)
+  const capabilities: Array<{
+    field: BooleanCapabilitySetting
+    label: CodexKey
+    hint: CodexKey
+  }> = [
+    { field: 'promptEnabled', label: 'capabilityPrompt', hint: 'capabilityPromptHint' },
+    { field: 'terminalToolsEnabled', label: 'capabilityTerminal', hint: 'capabilityTerminalHint' },
+    { field: 'patchToolEnabled', label: 'capabilityPatch', hint: 'capabilityPatchHint' },
+    { field: 'planToolEnabled', label: 'capabilityPlan', hint: 'capabilityPlanHint' },
+    { field: 'hostedWebSearchEnabled', label: 'capabilityWebSearch', hint: 'capabilityWebSearchHint' },
+    { field: 'remoteCompactionEnabled', label: 'capabilityCompaction', hint: 'capabilityCompactionHint' },
+    { field: 'activityIndicatorEnabled', label: 'capabilityActivity', hint: 'capabilityActivityHint' },
+  ]
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(current)
   const [saving, setSaving] = useState(false)
@@ -231,7 +325,30 @@ export function PromptSettingsCard(
               {t('promptReadOnly')}
             </p>
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+          <strong style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
+            {t('capabilitiesLabel')}
+          </strong>
+          <div style={{ display: 'grid', marginBottom: 14 }}>
+            {capabilities.map(capability => (
+              <CapabilityToggle
+                key={capability.field}
+                field={capability.field}
+                label={t(capability.label)}
+                hint={t(capability.hint)}
+                enabled={snapshot.value?.[capability.field] ?? true}
+                disabled={!snapshot.writable || saving}
+                setSetting={setSetting}
+              />
+            ))}
+          </div>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 7,
+            paddingTop: 12,
+            borderTop: '1px solid var(--dsw-alias-border-l2)',
+          }}>
             <label htmlFor="codex-system-prompt" style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>
               {t('promptLabel')}
             </label>
@@ -323,11 +440,9 @@ function FastModeFallback(
     & InjectFace<InputSettingsControlInjected>
     & PropsLocale<'codex'>,
 ) {
-  const { sessionId, useSessions, useSettings, setSetting, t } = props
-  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
+  const { useSettings, setSetting, t } = props
   const snapshot = useSettings(state => state as { value?: CodexSettings; writable: boolean })
   const fast = snapshot.value?.fast ?? false
-  if (!isCodexPresetId(agentPreset)) return null
   return (
     <button
       type="button"
@@ -386,11 +501,9 @@ function contextWindowFromProjection(useProjection: LegacyOverlayProps['useProje
 
 /** Settings form appended to the old host's context meter panel. */
 function ContextSizeControl({
-  contextWindow, sessionId, useSessions, useSettings, setSetting, unsetSetting, t,
+  contextWindow, sessionId: _sessionId, useSessions: _useSessions, useSettings, setSetting, unsetSetting, t,
 }: ContextSizeControlProps) {
-  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
   const snapshot = useSettings(state => state as { value?: CodexSettings; writable: boolean })
-  if (!isCodexPresetId(agentPreset)) return null
   const configured = snapshot.value?.contextWindow
   const maxK = CODEX_CONTEXT_MAX / CODEX_CONTEXT_UNIT
   const valueK = Math.min(maxK, Math.max(1, Math.round((configured ?? contextWindow) / CODEX_CONTEXT_UNIT)))
@@ -484,7 +597,7 @@ function ContextSizeControl({
 
 type ActivityProps = Pick<
   LegacyOverlayProps,
-  'sessionId' | 'useSession' | 'useSessions' | 'useProjection' | 't'
+  'sessionId' | 'useSession' | 'useSessions' | 'useProjection' | 'useSettings' | 't'
 >
 
 type CodexActivityReader = (key: 'codexActivity') => CodexActivity | null | undefined
@@ -496,11 +609,9 @@ function elapsedSeconds(startedAt: number, now: number): number {
 
 /** Prefer the session snapshot when an older projection host only exposes null. */
 export function resolveActivity(
-  agentPreset: string | undefined,
   projectedActivity: CodexActivity | null | undefined,
   fallbackActivity: ActivityFallback,
 ): CodexActivity | null {
-  if (!isCodexPresetId(agentPreset)) return null
   if (projectedActivity?.activity === 'awaiting-model') {
     return {
       activity: fallbackActivity?.activity ?? 'requesting-model',
@@ -512,9 +623,10 @@ export function resolveActivity(
 }
 
 export function ActivityLine({
-  sessionId, useSession, useSessions, useProjection, t, position,
+  sessionId: _sessionId, useSession, useSessions: _useSessions, useProjection, useSettings, t, position,
 }: ActivityProps & { position?: { left: number; top: number } }) {
-  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
+  const settings = useSettings(state => state as { value?: CodexSettings })
+  const enabled = settings.value?.activityIndicatorEnabled ?? true
   // Keep the projection seam optional: this package must still load when the
   // host has no session-projection registry or has not carried this key.
   const projectedActivity = (useProjection as unknown as CodexActivityReader)('codexActivity')
@@ -522,17 +634,17 @@ export function ActivityLine({
   // fallback only covers the short wire gap before the next projection frame;
   // tool calls intentionally remain silent because their cards own the status.
   const fallbackActivity = useSession(modelActivity, sameModelActivity)
-  const activity = resolveActivity(agentPreset, projectedActivity, fallbackActivity)
+  const activity = resolveActivity(projectedActivity, fallbackActivity)
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    if (!isCodexPresetId(agentPreset) || activity === undefined || activity === null) return undefined
+    if (!enabled || activity === undefined || activity === null) return undefined
     setNow(Date.now())
     const timer = setInterval(() => { setNow(Date.now()) }, 1_000)
     return () => clearInterval(timer)
-  }, [agentPreset, activity?.activity, activity?.startedAt])
+  }, [enabled, activity?.activity, activity?.startedAt])
 
-  if (!isCodexPresetId(agentPreset) || activity === undefined || activity === null) return null
+  if (!enabled || activity === undefined || activity === null) return null
   const label = activity.activity === 'compaction'
     ? t('activityCompacting')
     : activity.activity === 'model-reply'
@@ -686,8 +798,6 @@ function LegacyOverlay(props: LegacyOverlayProps) {
   const { contextDialog, turnStatus } = useLegacyHostTargets()
   const turnStatusPosition = useTurnStatusPosition(turnStatus)
   const contextWindow = contextWindowFromProjection(useProjection)
-  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
-  if (!isCodexPresetId(agentPreset)) return null
   return (
     <>
       {contextDialog !== null && createPortal(
@@ -709,6 +819,7 @@ function LegacyOverlay(props: LegacyOverlayProps) {
           useSession={useSession}
           useSessions={useSessions}
           useProjection={useProjection}
+          useSettings={useSettings}
           t={t}
           position={turnStatusPosition}
         />,

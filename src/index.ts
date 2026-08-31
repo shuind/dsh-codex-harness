@@ -41,6 +41,10 @@ const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 
 /** Configuration for the Codex shell result bridge. */
 export interface Config {
+  /** Install request/transport/activity enhancements for every agent scope. */
+  globalEnhancements?: boolean
+  /** Install the Codex operating prompt and four core tools in this scope. */
+  codexCore?: boolean
   /** Default wait before a pipe-backed command yields a session id. */
   defaultYieldTimeMs?: number
   /** Default wait for an empty `write_stdin` poll. */
@@ -59,6 +63,8 @@ export interface Config {
 
 /** Runtime configuration schema for the Codex tool bridge. */
 export const Config: z<Config> = z.object({
+  globalEnhancements: z.boolean().default(true),
+  codexCore: z.boolean().default(true),
   defaultYieldTimeMs: z.number().step(1).min(0).default(10_000),
   pollYieldTimeMs: z.number().step(1).min(0).default(5_000),
   writeYieldTimeMs: z.number().step(1).min(0).default(250),
@@ -195,10 +201,14 @@ function watchConfiguredGptModels(ctx: Context): void {
 /** Install the optional settings source used by requests and prompt assembly. */
 function installCodexSettings(ctx: Context, systemPrompt: string): { current: () => CodexSettings } {
   const entry: CodexSettings = { ...CODEX_SETTINGS_ENTRY, systemPrompt }
+  const withDefaults = (value: CodexSettings | undefined): CodexSettings => ({
+    ...entry,
+    ...value,
+  })
   const settings = ctx.get('settings')
   if (settings?.get(CODEX_SETTINGS_NAMESPACE) !== undefined) {
     return {
-      current: () => (settings.get(CODEX_SETTINGS_NAMESPACE) as CodexSettings | undefined) ?? entry,
+      current: () => withDefaults(settings.get(CODEX_SETTINGS_NAMESPACE) as CodexSettings | undefined),
     }
   }
   let source: () => CodexSettings = () => entry
@@ -206,7 +216,7 @@ function installCodexSettings(ctx: Context, systemPrompt: string): { current: ()
     setSource: (current) => { source = current },
     onChange: () => {},
   })
-  return { current: () => source() }
+  return { current: () => withDefaults(source()) }
 }
 
 function hasOpenTurn(session: Session): boolean {
@@ -318,6 +328,28 @@ export function normalizeCodexPromptAssembly(assembly: PromptAssembly): PromptAs
   }
 }
 
+const CODEX_TOOL_NAMES = {
+  terminalToolsEnabled: new Set(['exec_command', 'write_stdin']),
+  patchToolEnabled: new Set(['apply_patch']),
+  planToolEnabled: new Set(['update_plan']),
+} as const
+
+/** Remove disabled Codex capabilities from the next model-visible assembly. */
+export function applyCodexCapabilitySettings(
+  assembly: PromptAssembly,
+  settings: CodexSettings,
+): PromptAssembly {
+  const disabled = new Set<string>()
+  for (const [setting, names] of Object.entries(CODEX_TOOL_NAMES)) {
+    if (settings[setting as keyof typeof CODEX_TOOL_NAMES]) continue
+    for (const name of names) disabled.add(name)
+  }
+  const filtered = disabled.size === 0
+    ? assembly
+    : { ...assembly, tools: assembly.tools.filter(tool => !disabled.has(tool.name)) }
+  return settings.promptEnabled ? normalizeCodexPromptAssembly(filtered) : filtered
+}
+
 /** Build the complete plugin-owned prompt, preserving an intentional empty value. */
 export function buildCodexSystemPrompt(config: Pick<Config, 'systemPrompt'> = {}): string {
   return resolveCodexSystemPrompt(config.systemPrompt)
@@ -339,6 +371,23 @@ interface PlanArgumentItem {
 interface UpdatePlanArgs {
   explanation?: string
   plan: PlanArgumentItem[]
+}
+
+type CapabilitySetting =
+  | 'terminalToolsEnabled'
+  | 'patchToolEnabled'
+  | 'planToolEnabled'
+
+interface ExecToolConfig extends Required<Config> {
+  currentSettings: () => CodexSettings
+}
+
+function assertCapabilityEnabled(
+  current: () => CodexSettings,
+  setting: CapabilitySetting,
+  toolName: string,
+): void {
+  if (!current()[setting]) throw new Error(`${toolName}: disabled in Codex Harness plugin settings`)
 }
 
 interface AppliedFile {
@@ -480,7 +529,7 @@ function planTodos(args: UpdatePlanArgs): TodoItem[] {
   return todos
 }
 
-function registerExecTools(ctx: Context, config: Required<Config>): void {
+function registerExecTools(ctx: Context, config: ExecToolConfig): void {
   ctx.tools.register(defineTool({
     name: 'exec_command',
     description: EXEC_COMMAND_DESCRIPTION,
@@ -511,6 +560,7 @@ function registerExecTools(ctx: Context, config: Required<Config>): void {
       render: (_args, value) => [{ type: 'text', text: renderExecResult(value) }],
     },
     async execute(args: ExecCommandArgs, exec): Promise<ExecResult> {
+      assertCapabilityEnabled(config.currentSettings, 'terminalToolsEnabled', 'exec_command')
       return runExecCommand(ctx, args, exec, config)
     },
     presentCall: args => ({
@@ -545,12 +595,13 @@ function registerExecTools(ctx: Context, config: Required<Config>): void {
       render: (_args, value) => [{ type: 'text', text: renderExecResult(value) }],
     },
     async execute(args: WriteStdinArgs, exec): Promise<ExecResult> {
+      assertCapabilityEnabled(config.currentSettings, 'terminalToolsEnabled', 'write_stdin')
       return runWriteStdin(ctx, args, exec, config)
     },
   }))
 }
 
-function registerPatchTool(ctx: Context): void {
+function registerPatchTool(ctx: Context, currentSettings: () => CodexSettings): void {
   ctx.tools.register(defineTool({
     name: 'apply_patch',
     description: APPLY_PATCH_DESCRIPTION,
@@ -580,6 +631,7 @@ function registerPatchTool(ctx: Context): void {
       render: (_args, value) => [{ type: 'text', text: patchSummary(value) }],
     },
     async execute(args: { input: string }, exec): Promise<ApplyPatchResult> {
+      assertCapabilityEnabled(currentSettings, 'patchToolEnabled', 'apply_patch')
       const files = parsePatch(args.input)
       const policy = resolvePolicy(ctx, exec)
       const applied: AppliedFile[] = []
@@ -597,7 +649,7 @@ function registerPatchTool(ctx: Context): void {
   }))
 }
 
-function registerPlanTool(ctx: Context): void {
+function registerPlanTool(ctx: Context, currentSettings: () => CodexSettings): void {
   ctx.tools.register(defineTool({
     name: 'update_plan',
     description: UPDATE_PLAN_DESCRIPTION,
@@ -622,6 +674,7 @@ function registerPlanTool(ctx: Context): void {
       render: () => [{ type: 'text', text: 'Plan updated' }],
     },
     execute(args: UpdatePlanArgs, exec): Promise<Record<string, never>> {
+      assertCapabilityEnabled(currentSettings, 'planToolEnabled', 'update_plan')
       const agent = exec.agent
       if (agent === undefined) throw new Error('update_plan requires an owning agent session')
       agent.session.append('todo/write', { todos: planTodos(args) })
@@ -632,7 +685,9 @@ function registerPlanTool(ctx: Context): void {
 
 /** Mount the Codex prompt/tool layer inside one fixed agent preset. */
 export function apply(ctx: Context, config: Config = {}): void {
-  const resolved: Required<Config> = {
+  const resolved = {
+    globalEnhancements: config.globalEnhancements ?? true,
+    codexCore: config.codexCore ?? true,
     defaultYieldTimeMs: config.defaultYieldTimeMs ?? 10_000,
     pollYieldTimeMs: config.pollYieldTimeMs ?? 5_000,
     writeYieldTimeMs: config.writeYieldTimeMs ?? 250,
@@ -641,49 +696,64 @@ export function apply(ctx: Context, config: Config = {}): void {
     remoteCompact: config.remoteCompact ?? true,
     systemPrompt: config.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT,
   }
-  if (ctx.fs.sandboxMode !== undefined && ctx.get('sandboxPolicy') === undefined) {
+  if (resolved.codexCore
+    && ctx.fs.sandboxMode !== undefined
+    && ctx.get('sandboxPolicy') === undefined) {
     throw new Error('codex: a sandboxing filesystem requires ctx.sandboxPolicy')
   }
-  // The generic pi-ai plugin remains the owner of the user's configured
-  // provider routes. Codex adds only scoped transport behavior and capability
-  // metadata; failed remote operations continue through the generic path.
-  watchConfiguredGptModels(ctx)
-  registerCodexActivityProjection(ctx)
   const codexSettings = installCodexSettings(ctx, resolved.systemPrompt)
-  installCodexContextProjection(ctx, codexSettings.current)
-  // Keep these controls in the request config rather than mutating provider
-  // settings. That makes a change apply to the next step without rebuilding
-  // the user's model catalog, while the LLM service still freezes it per call.
-  ctx.on('agent/request', async (_payload, next) => {
-    const request = await next()
-    return applyCodexRequestSettings(request, codexSettings.current())
-  })
-  if (typeof (ctx as unknown as { effect?: unknown }).effect === 'function') {
-    const disposeHostedWebSearch = installHostedWebSearch()
-    ctx.effect(() => disposeHostedWebSearch, 'codex: Responses transport wrapper')
+  const execConfig = { ...resolved, currentSettings: codexSettings.current }
+
+  if (resolved.globalEnhancements) {
+    // The generic pi-ai plugin remains the owner of provider routes. This
+    // layer adds only request metadata and remote-first transport behavior.
+    watchConfiguredGptModels(ctx)
+    registerCodexActivityProjection(ctx)
+    installCodexContextProjection(ctx, codexSettings.current)
+    ctx.on('agent/request', async (_payload, next) => {
+      const request = await next()
+      return applyCodexRequestSettings(request, codexSettings.current())
+    })
+    if (typeof (ctx as unknown as { effect?: unknown }).effect === 'function') {
+      const disposeHostedWebSearch = installHostedWebSearch()
+      ctx.effect(() => disposeHostedWebSearch, 'codex: Responses transport wrapper')
+    }
+    ctx.on('llm/stream', ((options: any, next: any) => {
+      const settings = codexSettings.current()
+      if (resolved.remoteCompact
+        && settings.remoteCompactionEnabled
+        && options.purpose === 'compaction'
+        && isGptModel(options.model)) {
+        return remoteCompactStream(ctx, options, next, {
+          hostedWebSearch: resolved.hostedWebSearch && settings.hostedWebSearchEnabled,
+          customApplyPatch: settings.patchToolEnabled,
+        })
+      }
+      if (options.purpose === undefined && isGptModel(options.model)) {
+        return hostedWebSearchStream(next, {
+          serviceTier: options.serviceTier,
+          hostedWebSearch: resolved.hostedWebSearch && settings.hostedWebSearchEnabled,
+          customApplyPatch: settings.patchToolEnabled,
+        })
+      }
+      return next()
+    }) as any)
   }
-  ctx.on('llm/stream', ((options: any, next: any) => {
-    if (resolved.remoteCompact && options.purpose === 'compaction' && isGptModel(options.model)) {
-      return remoteCompactStream(ctx, options, next)
-    }
-    // Keep all ordinary GPT Responses calls inside the plugin-owned transport
-    // scope so apply_patch can use the same wire bridge even when hosted search
-    // and remote compaction are disabled.
-    if (options.purpose === undefined && isGptModel(options.model)) {
-      return hostedWebSearchStream(next, { serviceTier: options.serviceTier })
-    }
-    return next()
-  }) as any)
-  ctx.on('system-prompt/assemble', async (_assembly, _context, next) =>
-    normalizeCodexPromptAssembly(await next()))
-  ctx.systemPrompt.section({
-    name: 'codex:base',
-    order: 10,
-    text: () => resolveCodexSystemPrompt(codexSettings.current().systemPrompt),
-  })
-  registerExecTools(ctx, resolved)
-  registerPatchTool(ctx)
-  registerPlanTool(ctx)
+
+  if (resolved.codexCore) {
+    ctx.on('system-prompt/assemble', async (_assembly, _context, next) =>
+      applyCodexCapabilitySettings(await next(), codexSettings.current()))
+    ctx.systemPrompt.section({
+      name: 'codex:base',
+      order: 10,
+      text: () => codexSettings.current().promptEnabled
+        ? resolveCodexSystemPrompt(codexSettings.current().systemPrompt)
+        : '',
+    })
+    registerExecTools(ctx, execConfig)
+    registerPatchTool(ctx, codexSettings.current)
+    registerPlanTool(ctx, codexSettings.current)
+  }
 }
 
 export default { name, inject, Config, apply }

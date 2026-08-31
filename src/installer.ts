@@ -35,6 +35,7 @@ const BUNDLED_PRESET_SIGNATURES = new Set([
   'd1de30f5c13049621b1c1ae3fb22d35b031797a4762638265822b0ff62749854',
   'b50e1d616f9b4188a33c0da0fe355478b7b75b615f3792c094e2b67995622cf4',
   '6132523d92893f6ae9214b30105e9cc1ba64854df6ca8a84213069eb6c38d286',
+  '7957bc5e9b0f2fa0b74d2d8bae0d4ee153a2ba7bb430f5a848e700386cc7ce3f',
 ])
 
 function dshHomePath(...segments: string[]): string {

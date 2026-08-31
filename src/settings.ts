@@ -15,16 +15,44 @@ export interface CodexSettings {
   contextWindow?: number
   /** Complete plugin-owned Codex operating prompt. */
   systemPrompt?: string
+  /** Inject the plugin-owned Codex operating prompt. */
+  promptEnabled: boolean
+  /** Expose exec_command and write_stdin. */
+  terminalToolsEnabled: boolean
+  /** Expose apply_patch. */
+  patchToolEnabled: boolean
+  /** Expose update_plan. */
+  planToolEnabled: boolean
+  /** Upgrade local web_search declarations to the hosted Responses tool. */
+  hostedWebSearchEnabled: boolean
+  /** Prefer the provider's Responses compact endpoint. */
+  remoteCompactionEnabled: boolean
+  /** Show the Codex request/compaction activity indicator. */
+  activityIndicatorEnabled: boolean
 }
 
 /** Default settings exposed even before a Codex session is opened. */
 export const CODEX_SETTINGS_ENTRY: CodexSettings = {
   fast: false,
   systemPrompt: DEFAULT_CODEX_SYSTEM_PROMPT,
+  promptEnabled: true,
+  terminalToolsEnabled: true,
+  patchToolEnabled: true,
+  planToolEnabled: true,
+  hostedWebSearchEnabled: true,
+  remoteCompactionEnabled: true,
+  activityIndicatorEnabled: true,
 }
 
 export const CODEX_SETTINGS_SCHEMA: z<CodexSettings> = z.object({
   fast: z.boolean().default(false),
   contextWindow: z.number().step(1).min(1).max(CODEX_CONTEXT_MAX),
   systemPrompt: z.string().default(DEFAULT_CODEX_SYSTEM_PROMPT),
+  promptEnabled: z.boolean().default(true),
+  terminalToolsEnabled: z.boolean().default(true),
+  patchToolEnabled: z.boolean().default(true),
+  planToolEnabled: z.boolean().default(true),
+  hostedWebSearchEnabled: z.boolean().default(true),
+  remoteCompactionEnabled: z.boolean().default(true),
+  activityIndicatorEnabled: z.boolean().default(true),
 })

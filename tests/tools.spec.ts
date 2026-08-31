@@ -5,6 +5,7 @@ import type { ShellExecRequest, ShellExecSpec, ShellProcess } from '@deepseek-ai
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { apply, enrichCodexModel } from '../src/index.ts'
 import { normalizeWaitMs, runExecCommand, runWriteStdin } from '../src/exec.ts'
+import { CODEX_SETTINGS_ENTRY } from '../src/settings.ts'
 import {
   addCodexApplyPatch,
   addHostedWebSearch,
@@ -16,7 +17,10 @@ import {
   replaceRemoteCompactions,
 } from '../src/remote.ts'
 
-function mount(settings?: { get(ns: unknown): unknown; update(ns: unknown, patch: object): Promise<void> }): {
+function mount(
+  settings?: { get(ns: unknown): unknown; update(ns: unknown, patch: object): Promise<void> },
+  config: Parameters<typeof apply>[1] = {},
+): {
   definitions: ToolDefinition[]
   promptSections: string[]
 } {
@@ -30,7 +34,7 @@ function mount(settings?: { get(ns: unknown): unknown; update(ns: unknown, patch
     on: () => () => {},
     inject: () => {},
   } as unknown as Context
-  apply(ctx)
+  apply(ctx, config)
   return { definitions, promptSections }
 }
 
@@ -510,6 +514,23 @@ describe('Codex tool catalog', () => {
     expect(body.input).toEqual([{ type: 'compaction', encrypted_content: 'opaque' }])
   })
 
+  it('keeps disabled hosted and custom-tool capabilities on the generic Responses path', () => {
+    const body = rewriteCodexResponsesBody({
+      model: 'gpt-5.4',
+      tools: [
+        { type: 'function', name: 'web_search' },
+        { type: 'function', name: 'apply_patch', description: 'patch files', parameters: {} },
+      ],
+    }, {
+      hostedWebSearch: false,
+      customApplyPatch: false,
+    })
+    expect(body.tools).toEqual([
+      { type: 'function', name: 'web_search' },
+      { type: 'function', name: 'apply_patch', description: 'patch files', parameters: {} },
+    ])
+  })
+
   it('restores a remote compaction item at the final Responses wire boundary', () => {
     expect(replaceRemoteCompactions({
       input: [{
@@ -986,6 +1007,49 @@ describe('Codex tool catalog', () => {
       'Edits files using Codex patch syntax with Begin/End Patch markers and file update directives. In hunk lines, the first character is the operation marker; repeat a source-leading marker when the source line itself starts with one.',
       'Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.',
     ])
+  })
+
+  it('keeps Codex prompt and core tools out of the global enhancement layer', () => {
+    const global = mount(undefined, { globalEnhancements: true, codexCore: false })
+    expect(global.definitions).toEqual([])
+    expect(global.promptSections).toEqual([])
+
+    const codex = mount(undefined, { globalEnhancements: false, codexCore: true })
+    expect(codex.definitions.map(tool => tool.name)).toEqual([
+      'exec_command',
+      'write_stdin',
+      'apply_patch',
+      'update_plan',
+    ])
+    expect(codex.promptSections).toEqual(['codex:base'])
+  })
+
+  it('rejects stale calls after a Codex tool capability is disabled', async () => {
+    const settingsValue = {
+      ...CODEX_SETTINGS_ENTRY,
+      terminalToolsEnabled: false,
+      patchToolEnabled: false,
+      planToolEnabled: false,
+    }
+    const { definitions } = mount({
+      get: () => settingsValue,
+      update: async () => {},
+    })
+    const execution = {
+      signal: new AbortController().signal,
+      deferContext: () => {},
+      concludeTurn: () => {},
+    } as unknown as ToolRunContext
+
+    await expect(definitions.find(tool => tool.name === 'exec_command')!.execute({
+      cmd: 'echo no',
+    }, execution)).rejects.toThrow('disabled in Codex Harness plugin settings')
+    await expect(definitions.find(tool => tool.name === 'apply_patch')!.execute({
+      input: '*** Begin Patch\n*** End Patch',
+    }, execution)).rejects.toThrow('disabled in Codex Harness plugin settings')
+    await expect(definitions.find(tool => tool.name === 'update_plan')!.execute({
+      plan: [],
+    }, execution)).rejects.toThrow('disabled in Codex Harness plugin settings')
   })
 
   it('keeps Codex parameter names and result schemas model-visible', () => {

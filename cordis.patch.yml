@@ -1,10 +1,11 @@
 - insert:
-    # The bundle is host-plane installation only. The Codex tool/prompt row
-    # lives in the bundled agent preset, so other presets stay unchanged.
+    # Keep preset installation and settings registration on the host plane.
     - id: codex-preset-installer
       name: '@shuind/dsh-codex-harness/installer'
-    # Register the browser face as part of the bundle. Without this explicit
-    # entry, a profile can load the host installer while the Web client never
-    # receives Fast/context controls.
+    # This row owns the global capability layer and also advertises the
+    # browser face. Codex prompt/tools remain agent-preset scoped.
     - id: codex-client
       name: '@shuind/dsh-codex-harness'
+      config:
+        globalEnhancements: true
+        codexCore: false

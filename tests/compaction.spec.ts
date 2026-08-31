@@ -200,6 +200,7 @@ describe('Codex compaction context capacity', () => {
     ctx.provide('llm', { resolveModelInfo, stream } as never)
     ctx.provide('tokenMeter', {
       measure: () => pressureMeasurement(session, session.surface.replaceGeneration > 0 ? 0 : 381_000),
+      estimateMessage: () => 0,
     } as never)
 
     const compact = new CodexCompactionEngine(ctx, { auto: false, compactionRetries: 0 })

@@ -76,8 +76,7 @@ describe('Codex client activity fallback', () => {
 
   it('uses the legacy session fallback while the projection is null', () => {
     const fallback = { activity: 'requesting-model' as const, startedAt: 123 }
-    expect(resolveVisibleActivity('codex', null, fallback)).toEqual(fallback)
-    expect(resolveVisibleActivity('standard', null, fallback)).toBeNull()
+    expect(resolveVisibleActivity(null, fallback)).toEqual(fallback)
   })
 
 })
