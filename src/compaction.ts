@@ -6,10 +6,12 @@ import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 
 type LlmService = NonNullable<Context['llm']>
+type CodexGenerateOptions = GenerateOptions & { contextWindow?: number }
 
 const CODEX_SETTINGS_NAMESPACE = settingsNamespace('codex')
 
@@ -56,7 +58,29 @@ function requestContextWindow(session: Session, provider: string, model: string)
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
-/** Overlay only the capacity lookup used by pressure compaction. */
+/** Resolve the capacity currently in force for an active Codex compaction. */
+function activeContextWindow(
+  ctx: Context,
+  activeSession: AsyncLocalStorage<Session>,
+  provider: string,
+  model: string,
+): number | undefined {
+  const session = activeSession.getStore()
+  const requestContext = session?.requestContext()
+  const configured = isGptModel(model)
+    ? configuredContextWindow(ctx)
+    : { available: false }
+  // A live setting must win before the old request header: automatic pressure
+  // runs before the next request rebuilds that header.
+  return configured.available
+    ? configured.value
+    : (session === undefined ? undefined : requestContextWindow(session, provider, model))
+      ?? (requestContext?.provider === provider && requestContext.model === model
+        ? requestContext.contextWindow
+        : undefined)
+}
+
+/** Overlay capacity lookup and auxiliary summary requests for compaction. */
 function withDurableContextCapacity(
   llm: LlmService,
   ctx: Context,
@@ -67,24 +91,21 @@ function withDurableContextCapacity(
       if (property === 'resolveModelInfo') {
         return async (provider: string, model: string, signal?: AbortSignal) => {
           const info = await target.resolveModelInfo(provider, model, signal)
-          const requestContext = activeSession.getStore()?.requestContext()
-          const session = activeSession.getStore()
-          const configured = isGptModel(model)
-            ? configuredContextWindow(ctx)
-            : { available: false }
-          // A live setting must win before the old request header: automatic
-          // pressure runs before the next request rebuilds that header.
-          const contextWindow = configured.available
-            ? configured.value
-            : (session === undefined ? undefined : requestContextWindow(session, provider, model))
-              ?? (requestContext?.provider === provider && requestContext.model === model
-                ? requestContext.contextWindow
-                : undefined)
+          const contextWindow = activeContextWindow(ctx, activeSession, provider, model)
           if (contextWindow === undefined) return info
           return {
             ...info,
             context: { ...info.context, contextWindow },
           }
+        }
+      }
+      if (property === 'stream') {
+        return (options: CodexGenerateOptions) => {
+          const contextWindow = activeContextWindow(ctx, activeSession, options.provider, options.model)
+          if (contextWindow === undefined || options.contextWindow === contextWindow) {
+            return target.stream(options)
+          }
+          return target.stream({ ...options, contextWindow } as GenerateOptions)
         }
       }
       const value = Reflect.get(target, property, target)
@@ -118,5 +139,16 @@ export default class CodexCompactionEngine extends BasicCompactionEngine {
     signal: AbortSignal,
   ): Promise<CompactionResult | null> {
     return this.activeSession.run(agent.session, () => super.compactIfNeeded(agent, trigger, signal))
+  }
+
+  override compactNow(
+    agent: Agent,
+    signal: AbortSignal,
+    sourceCommandId?: Parameters<BasicCompactionEngine['compactNow']>[2],
+  ): Promise<CompactionResult | null> {
+    return this.activeSession.run(
+      agent.session,
+      () => super.compactNow(agent, signal, sourceCommandId),
+    )
   }
 }

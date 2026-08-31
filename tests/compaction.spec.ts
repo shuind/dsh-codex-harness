@@ -175,6 +175,49 @@ describe('Codex compaction context capacity', () => {
     expect(compactRegion).toHaveBeenCalledOnce()
   })
 
+  it('passes the live Codex capacity into the auxiliary summary request', async () => {
+    const ctx = new Context()
+    const session = sessionWithDurableContext(262_144)
+    let summaryOptions: Record<string, unknown> | undefined
+    ctx.provide('settings', {
+      get: () => ({ contextWindow: 400_000 }),
+    } as never)
+    const resolveModelInfo = vi.fn(async (): Promise<LlmResolvedModelInfo> => ({
+      provider: PROVIDER,
+      id: MODEL,
+      name: MODEL,
+      context: { contextWindow: 262_144 },
+    }))
+    const stream = vi.fn((options: Record<string, unknown>) => {
+      summaryOptions = options
+      return (async function* () {
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: 'summary' }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'summary' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    })
+    ctx.provide('llm', { resolveModelInfo, stream } as never)
+    ctx.provide('tokenMeter', {
+      measure: () => pressureMeasurement(session, session.surface.replaceGeneration > 0 ? 0 : 381_000),
+    } as never)
+
+    const compact = new CodexCompactionEngine(ctx, { auto: false, compactionRetries: 0 })
+
+    await expect(compact.compactIfNeeded({
+      session,
+      options: { provider: PROVIDER, model: MODEL },
+    } as never, 'pressure', new AbortController().signal)).resolves.not.toBeNull()
+
+    expect(stream).toHaveBeenCalledOnce()
+    expect(summaryOptions).toMatchObject({
+      provider: PROVIDER,
+      model: MODEL,
+      contextWindow: 400_000,
+      purpose: 'compaction',
+    })
+  })
+
   it('uses the changed live setting instead of a stale request-header override', async () => {
     const ctx = new Context()
     const session = sessionWithDurableContext(400_000, '', 400_000)

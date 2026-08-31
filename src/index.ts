@@ -70,9 +70,9 @@ export const Config: z<Config> = z.object({
 
 const LLM_PI_AI_SETTINGS = settingsNamespace('llm-pi-ai')
 
-/** Plugin-owned extension envelope; official DSH can carry these as unknown fields. */
+/** Codex request envelope with the plugin's provider-facing service-tier field. */
 export interface CodexRequestConfig extends LlmCallConfig {
-  /** Codex request context capacity override, in tokens. */
+  /** Codex request context capacity override, retained for older DSH hosts. */
   contextWindow?: number
   /** Provider-facing service tier, for example Responses `priority`. */
   serviceTier?: string
@@ -219,9 +219,9 @@ function hasOpenTurn(session: Session): boolean {
  * Pair the live Codex capacity with the token-meter context projection.
  *
  * The core loop records adapter metadata in `request/context`, while Codex's
- * setting is a plugin-owned request extension. Appending the override after
- * the loop's metadata event keeps the official ContextMeter and compaction
- * engine on the same effective capacity.
+ * setting is a request-scoped LLM capacity. Appending the override after the
+ * loop's metadata event keeps the official ContextMeter and compaction engine
+ * on the same effective capacity.
  */
 export function syncCodexContextWindow(session: Session, contextWindow: number | undefined): void {
   if (contextWindow === undefined
