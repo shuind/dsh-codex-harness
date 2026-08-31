@@ -4,7 +4,7 @@
 
 ## 功能
 
-- 使用精简codex提示词；对gpt过度拉屎做了少量提示词防御。
+- 使用精简codex提示词；对gpt过度拉屎做了少量提示词约束。
 - 在 **设置 → 插件 → 插件配置 → Codex Harness** 中查看、编辑或恢复完整提示词。
 - 提供 `exec_command`、`write_stdin`、`apply_patch` 和 `update_plan`。
 - 支持 Fast 请求、GPT 图片与思考强度和上下文容量。
