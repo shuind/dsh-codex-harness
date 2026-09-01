@@ -36,6 +36,7 @@ interface RemoteCompactResult {
 const SETTINGS_NAMESPACE = 'llm-pi-ai'
 const REMOTE_COMPACTION_OPEN = '<codex-remote-compaction>'
 const REMOTE_COMPACTION_CLOSE = '</codex-remote-compaction>'
+const CONTEXT_WINDOW_EXCEEDED_CODE = 'CONTEXT_WINDOW_EXCEEDED'
 const CODEX_ERROR_DIRECTORY = ['diagnostics', 'openai-codex-errors'] as const
 interface CodexRequestWireOptions {
   /** Provider-facing request option preserved by older DSH LLM adapters. */
@@ -504,6 +505,51 @@ export function hostedWebSearchStream(
       }
     } finally {
       if (!completed) await iterator.return?.()
+    }
+  })()
+}
+
+function contextTokens(usage: TokenUsage): number | undefined {
+  const fields = [
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cacheReadTokens ?? 0,
+    usage.cacheWriteTokens ?? 0,
+  ]
+  if (fields.some(value => !Number.isSafeInteger(value) || value < 0)) return undefined
+  const total = fields.reduce((sum, value) => sum + value, 0)
+  return Number.isSafeInteger(total) ? total : undefined
+}
+
+/**
+ * Correct the usage-only overflow verdict emitted by pi-ai adapters that do
+ * not yet consume the request-scoped Codex capacity.
+ */
+export function repairLegacyPiAiContextOverflow(
+  stream: AsyncIterable<StreamChunk>,
+  model: string,
+  contextWindow: unknown,
+): AsyncIterable<StreamChunk> {
+  return (async function* (): AsyncGenerator<StreamChunk> {
+    let usage: TokenUsage | undefined
+    for await (const chunk of stream) {
+      if (chunk.type === 'usage') usage = chunk.usage
+      const usedTokens = usage === undefined ? undefined : contextTokens(usage)
+      if (chunk.type === 'finish'
+        && chunk.reason.kind === 'error'
+        && chunk.reason.failure.code === CONTEXT_WINDOW_EXCEEDED_CODE
+        && chunk.reason.failure.message === `pi-ai detected context overflow for model "${model}"`
+        && typeof contextWindow === 'number'
+        && Number.isSafeInteger(contextWindow)
+        && contextWindow > 0
+        && usage !== undefined
+        && usage.outputTokens > 0
+        && usedTokens !== undefined
+        && usedTokens <= contextWindow) {
+        yield { ...chunk, reason: { kind: 'stop' } }
+        continue
+      }
+      yield chunk
     }
   })()
 }

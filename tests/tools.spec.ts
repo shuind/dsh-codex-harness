@@ -5,7 +5,7 @@ import type { ShellExecRequest, ShellExecSpec, ShellProcess } from '@deepseek-ai
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { apply, enrichCodexModel } from '../src/index.ts'
 import { normalizeWaitMs, runExecCommand, runWriteStdin } from '../src/exec.ts'
-import { CODEX_SETTINGS_ENTRY } from '../src/settings.ts'
+import { CODEX_SETTINGS_ENTRY, CODEX_SETTINGS_NAMESPACE } from '../src/settings.ts'
 import {
   addCodexApplyPatch,
   addHostedWebSearch,
@@ -17,25 +17,39 @@ import {
   replaceRemoteCompactions,
 } from '../src/remote.ts'
 
+async function collectChunks(stream: AsyncIterable<unknown>): Promise<unknown[]> {
+  const chunks: unknown[] = []
+  for await (const chunk of stream) chunks.push(chunk)
+  return chunks
+}
+
 function mount(
   settings?: { get(ns: unknown): unknown; update(ns: unknown, patch: object): Promise<void> },
   config: Parameters<typeof apply>[1] = {},
 ): {
   definitions: ToolDefinition[]
   promptSections: string[]
+  listeners: Map<string, Array<(...args: any[]) => unknown>>
 } {
   const definitions: ToolDefinition[] = []
   const promptSections: string[] = []
+  const listeners = new Map<string, Array<(...args: any[]) => unknown>>()
   const ctx = {
     tools: { register: (definition: ToolDefinition) => { definitions.push(definition) } },
     systemPrompt: { section: (section: { name: string }) => { promptSections.push(section.name) } },
     fs: { sandboxMode: undefined },
     get: () => settings,
-    on: () => () => {},
+    on: (event: string, listener: (...args: any[]) => unknown) => {
+      const entries = listeners.get(event) ?? []
+      entries.push(listener)
+      listeners.set(event, entries)
+      return () => {}
+    },
     inject: () => {},
+    logger: { warn: () => {} },
   } as unknown as Context
   apply(ctx, config)
-  return { definitions, promptSections }
+  return { definitions, promptSections, listeners }
 }
 
 describe('Codex tool catalog', () => {
@@ -922,6 +936,81 @@ describe('Codex tool catalog', () => {
         }))
         expect(chunks.some(chunk => (chunk as { type?: unknown }).type === 'usage')).toBe(false)
       }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('repairs old pi-ai overflow once through ordinary and compaction streams', async () => {
+    const settings = {
+      get: (namespace: unknown) => namespace === CODEX_SETTINGS_NAMESPACE
+        ? { ...CODEX_SETTINGS_ENTRY, contextWindow: 400_000 }
+        : { providers: { relay: { api: 'openai-responses', baseURL: 'https://relay.example/v1' } } },
+      update: async () => {},
+    }
+    const { listeners } = mount(settings)
+    const listener = listeners.get('llm/stream')?.[0]
+    expect(listener).toBeDefined()
+    const overflow = {
+      type: 'finish' as const,
+      reason: {
+        kind: 'error' as const,
+        failure: {
+          message: 'pi-ai detected context overflow for model "gpt-5.6-luna"',
+          code: 'CONTEXT_WINDOW_EXCEEDED',
+        },
+      },
+    }
+    const source = async function* () {
+      yield {
+        type: 'usage',
+        usage: { inputTokens: 867, outputTokens: 90, cacheReadTokens: 282_240 },
+      } as never
+      yield overflow as never
+    }
+    let ordinaryCalls = 0
+    const ordinary = listener!({
+      provider: 'relay',
+      model: 'gpt-5.6-luna',
+      messages: [],
+      contextWindow: 400_000,
+    }, () => {
+      ordinaryCalls += 1
+      return source()
+    }) as AsyncIterable<unknown>
+    expect((await collectChunks(ordinary)).at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    expect(ordinaryCalls).toBe(1)
+
+    let titleCalls = 0
+    const title = listener!({
+      provider: 'relay',
+      model: 'gpt-5.6-luna',
+      messages: [],
+      contextWindow: 400_000,
+      purpose: 'session-title',
+    }, () => {
+      titleCalls += 1
+      return source()
+    }) as AsyncIterable<unknown>
+    expect((await collectChunks(title)).at(-1)).toEqual(overflow)
+    expect(titleCalls).toBe(1)
+
+    const originalFetch = globalThis.fetch
+    let compactionCalls = 0
+    globalThis.fetch = async () => { throw new TypeError('compact endpoint unavailable') }
+    try {
+      const compaction = listener!({
+        provider: 'relay',
+        model: 'gpt-5.6-luna',
+        messages: [],
+        contextWindow: 400_000,
+        purpose: 'compaction',
+      }, () => {
+        compactionCalls += 1
+        return source()
+      }) as AsyncIterable<unknown>
+      expect((await collectChunks(compaction)).at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+      expect(compactionCalls).toBe(1)
     } finally {
       globalThis.fetch = originalFetch
     }

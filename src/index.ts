@@ -23,7 +23,12 @@ import { APPLY_PATCH_DESCRIPTION, applyPatchHunks, parsePatch } from './patch.ts
 import type { PatchFile } from './patch.ts'
 import { renderExecResult, runExecCommand, runWriteStdin } from './exec.ts'
 import type { ExecCommandArgs, ExecResult, WriteStdinArgs } from './exec.ts'
-import { hostedWebSearchStream, installHostedWebSearch, remoteCompactStream } from './remote.ts'
+import {
+  hostedWebSearchStream,
+  installHostedWebSearch,
+  remoteCompactStream,
+  repairLegacyPiAiContextOverflow,
+} from './remote.ts'
 import { registerCodexActivityProjection } from './activity.ts'
 import { DEFAULT_CODEX_SYSTEM_PROMPT, resolveCodexSystemPrompt } from './prompt.ts'
 import {
@@ -720,21 +725,30 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
     ctx.on('llm/stream', ((options: any, next: any) => {
       const settings = codexSettings.current()
+      const legacySafeNext = () => repairLegacyPiAiContextOverflow(
+        next(),
+        options.model,
+        options.contextWindow,
+      )
       if (resolved.remoteCompact
         && settings.remoteCompactionEnabled
         && options.purpose === 'compaction'
         && isGptModel(options.model)) {
-        return remoteCompactStream(ctx, options, next, {
+        return remoteCompactStream(ctx, options, legacySafeNext, {
           hostedWebSearch: resolved.hostedWebSearch && settings.hostedWebSearchEnabled,
           customApplyPatch: settings.patchToolEnabled,
         })
       }
       if (options.purpose === undefined && isGptModel(options.model)) {
-        return hostedWebSearchStream(next, {
-          serviceTier: options.serviceTier,
-          hostedWebSearch: resolved.hostedWebSearch && settings.hostedWebSearchEnabled,
-          customApplyPatch: settings.patchToolEnabled,
-        })
+        return repairLegacyPiAiContextOverflow(
+          hostedWebSearchStream(next, {
+            serviceTier: options.serviceTier,
+            hostedWebSearch: resolved.hostedWebSearch && settings.hostedWebSearchEnabled,
+            customApplyPatch: settings.patchToolEnabled,
+          }),
+          options.model,
+          options.contextWindow,
+        )
       }
       return next()
     }) as any)

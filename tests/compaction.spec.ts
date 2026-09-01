@@ -191,9 +191,10 @@ describe('Codex compaction context capacity', () => {
     const stream = vi.fn((options: Record<string, unknown>) => {
       summaryOptions = options
       return (async function* () {
+        const summary = '<codex-remote-compaction>opaque</codex-remote-compaction>'
         yield { type: 'block-start', index: 0, blockType: 'text' }
-        yield { type: 'text-delta', index: 0, text: 'summary' }
-        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'summary' } }
+        yield { type: 'text-delta', index: 0, text: summary }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: summary } }
         yield { type: 'finish', reason: { kind: 'stop' } }
       })()
     })
@@ -217,6 +218,17 @@ describe('Codex compaction context capacity', () => {
       contextWindow: 400_000,
       purpose: 'compaction',
     })
+    expect(session.surface.replaceGeneration).toBe(1)
+    const checkpoint = session.events.findLast(event => (
+      event.type === 'user/message'
+      && event.data.source.kind === 'plugin'
+      && event.data.source.plugin === 'compact'
+    ))
+    expect(checkpoint).toMatchObject({
+      surfaceOp: { op: 'replace' },
+      data: { source: { kind: 'plugin', plugin: 'compact' } },
+    })
+    expect(JSON.stringify(checkpoint)).toContain('<codex-remote-compaction>opaque</codex-remote-compaction>')
   })
 
   it('uses the changed live setting instead of a stale request-header override', async () => {
