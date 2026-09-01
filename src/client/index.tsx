@@ -1,6 +1,7 @@
 /** Browser controls for Codex requests and the editable operating prompt. */
 
 import { useEffect, useLayoutEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { Context } from '@deepseek-ai/cordis'
@@ -11,7 +12,12 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { CODEX_CONTEXT_MAX, CODEX_CONTEXT_UNIT } from '../context.ts'
-import { DEFAULT_CODEX_SYSTEM_PROMPT } from '../prompt.ts'
+import {
+  DEFAULT_CODEX_PERSONA,
+  DEFAULT_CODEX_SYSTEM_PROMPT,
+  DEFAULT_DSH_CORE_SOURCE_PROMPT,
+  DEFAULT_DSH_CORE_WEB_PROMPT,
+} from '../prompt.ts'
 import type { CodexActivity } from '../activity-types.ts'
 import { modelActivity, sameModelActivity } from './activity.ts'
 
@@ -25,6 +31,9 @@ const DEFAULT_CONTEXT_WINDOW = 262_144
 interface CodexSettings {
   fast: boolean
   contextWindow?: number
+  persona?: string
+  harnessSourcePrompt?: string
+  webSurfacePrompt?: string
   systemPrompt?: string
   promptEnabled: boolean
   terminalToolsEnabled: boolean
@@ -48,14 +57,15 @@ const en = {
   contextRestore: 'Restore model default',
   promptCardTitle: 'Codex Harness',
   promptCardDescription: 'Choose Codex capabilities and customize the operating prompt.',
-  capabilitiesLabel: 'Codex mode capabilities',
-  capabilityPrompt: 'Codex operating prompt (Codex mode only)',
+  codexOnlyCapabilitiesLabel: 'Codex mode only',
+  otherCapabilitiesLabel: 'Additional capabilities',
+  capabilityPrompt: 'Codex operating prompt',
   capabilityPromptHint: 'Inject the editable instructions and persona-first prompt layout.',
-  capabilityTerminal: 'Terminal tools (Codex mode only)',
+  capabilityTerminal: 'Terminal tools',
   capabilityTerminalHint: 'Expose exec_command and write_stdin.',
-  capabilityPatch: 'Patch tool (Codex mode only)',
+  capabilityPatch: 'Patch tool',
   capabilityPatchHint: 'Expose apply_patch, using the native Responses grammar when supported.',
-  capabilityPlan: 'Plan tool (Codex mode only)',
+  capabilityPlan: 'Plan tool',
   capabilityPlanHint: 'Expose update_plan for implementation task tracking.',
   capabilityWebSearch: 'Hosted web search',
   capabilityWebSearchHint: 'Use the provider-native Responses web_search tool when available.',
@@ -63,10 +73,16 @@ const en = {
   capabilityCompactionHint: 'Prefer the provider Responses compact endpoint before local compaction.',
   capabilityActivity: 'Activity indicator',
   capabilityActivityHint: 'Show request, reply, and compaction status beside the conversation.',
-  promptLabel: 'System prompt',
-  promptHint: 'This is the full prompt owned by this plugin. Persona and DSH tool guidance stay dynamic.',
-  promptOverridden: 'Overridden',
-  promptReset: 'Restore default',
+  promptCustomizationLabel: 'Prompt customization',
+  personaLabel: 'Persona',
+  personaHint: 'Deployment identity and role. Supports {{model}} and {{cwd}}.',
+  sourcePromptLabel: 'DSH Core source instructions',
+  sourcePromptHint: 'Guidance about the DSH checkout and working directory. Supports {{sourceRoot}}.',
+  webPromptLabel: 'DSH Core Web instructions',
+  webPromptHint: 'Guidance about this Web GUI, HMR, builds, and verification. Supports {{webUrl}}.',
+  promptRestoreAll: 'Restore all prompt defaults',
+  promptLabel: 'Codex operating prompt',
+  promptHint: 'This is the Codex operating prompt. Persona and DSH Core instructions are edited separately above.',
   promptUnsaved: 'Unsaved',
   promptDiscard: 'Discard',
   promptSave: 'Save',
@@ -91,14 +107,15 @@ const zh = {
   contextRestore: '\u6062\u590d\u6a21\u578b\u9ed8\u8ba4\u503c',
   promptCardTitle: 'Codex Harness',
   promptCardDescription: '\u9009\u62e9 Codex \u80fd\u529b\u5e76\u81ea\u5b9a\u4e49\u5b8c\u6574\u7684\u64cd\u4f5c\u63d0\u793a\u8bcd\u3002',
-  capabilitiesLabel: 'Codex \u6a21\u5f0f\u80fd\u529b',
-  capabilityPrompt: 'Codex \u64cd\u4f5c\u63d0\u793a\u8bcd\uff08\u4ec5\u5728 Codex \u6a21\u5f0f\uff09',
+  codexOnlyCapabilitiesLabel: '\u4ec5\u5728 Codex \u6a21\u5f0f\u4e0b',
+  otherCapabilitiesLabel: '\u5176\u4ed6\u80fd\u529b',
+  capabilityPrompt: 'Codex \u64cd\u4f5c\u63d0\u793a\u8bcd',
   capabilityPromptHint: '\u6ce8\u5165\u53ef\u7f16\u8f91\u6307\u4ee4\uff0c\u5e76\u5c06 Persona \u653e\u5728\u63d0\u793a\u8bcd\u9996\u4f4d\u3002',
-  capabilityTerminal: '\u7ec8\u7aef\u5de5\u5177\uff08\u4ec5\u5728 Codex \u6a21\u5f0f\uff09',
+  capabilityTerminal: '\u7ec8\u7aef\u5de5\u5177',
   capabilityTerminalHint: '\u63d0\u4f9b exec_command \u548c write_stdin\u3002',
-  capabilityPatch: '\u8865\u4e01\u5de5\u5177\uff08\u4ec5\u5728 Codex \u6a21\u5f0f\uff09',
+  capabilityPatch: '\u8865\u4e01\u5de5\u5177',
   capabilityPatchHint: '\u63d0\u4f9b apply_patch\uff0c\u5e76\u5728\u652f\u6301\u65f6\u4f7f\u7528 Responses \u539f\u751f\u8bed\u6cd5\u3002',
-  capabilityPlan: '\u8ba1\u5212\u5de5\u5177\uff08\u4ec5\u5728 Codex \u6a21\u5f0f\uff09',
+  capabilityPlan: '\u8ba1\u5212\u5de5\u5177',
   capabilityPlanHint: '\u63d0\u4f9b update_plan\uff0c\u7528\u4e8e\u8ddf\u8e2a\u5b9e\u65bd\u4efb\u52a1\u3002',
   capabilityWebSearch: '\u6258\u7ba1\u7f51\u7edc\u641c\u7d22',
   capabilityWebSearchHint: '\u53ef\u7528\u65f6\u4f7f\u7528\u63d0\u4f9b\u5546\u539f\u751f\u7684 Responses web_search \u5de5\u5177\u3002',
@@ -106,10 +123,16 @@ const zh = {
   capabilityCompactionHint: '\u4f18\u5148\u8c03\u7528\u63d0\u4f9b\u5546\u7684 Responses compact \u7aef\u70b9\uff0c\u5931\u8d25\u65f6\u56de\u9000\u672c\u5730\u538b\u7f29\u3002',
   capabilityActivity: '\u6d3b\u52a8\u72b6\u6001',
   capabilityActivityHint: '\u5728\u5bf9\u8bdd\u65c1\u663e\u793a\u8bf7\u6c42\u3001\u56de\u590d\u548c\u538b\u7f29\u72b6\u6001\u3002',
-  promptLabel: '\u7cfb\u7edf\u63d0\u793a\u8bcd',
-  promptHint: '\u8fd9\u662f\u672c\u63d2\u4ef6\u8d1f\u8d23\u7684\u5168\u90e8\u63d0\u793a\u8bcd\uff1bPersona \u548c DSH \u5de5\u5177\u6307\u5bfc\u4ecd\u4f1a\u52a8\u6001\u6ce8\u5165\u3002',
-  promptOverridden: '\u5df2\u8986\u76d6',
-  promptReset: '\u6062\u590d\u9ed8\u8ba4',
+  promptCustomizationLabel: '\u63d0\u793a\u8bcd\u5b9a\u5236',
+  personaLabel: 'Persona',
+  personaHint: '\u5b9a\u4e49 Agent \u7684\u8eab\u4efd\u4e0e\u89d2\u8272\uff0c\u652f\u6301 {{model}} \u548c {{cwd}}\u3002',
+  sourcePromptLabel: 'DSH Core \u6e90\u7801\u8bf4\u660e',
+  sourcePromptHint: '\u8bf4\u660e DSH \u6e90\u7801\u68c0\u51fa\u76ee\u5f55\u4e0e\u5de5\u4f5c\u76ee\u5f55\uff0c\u652f\u6301 {{sourceRoot}}\u3002',
+  webPromptLabel: 'DSH Core Web \u8bf4\u660e',
+  webPromptHint: '\u8bf4\u660e Web GUI\u3001HMR\u3001\u6784\u5efa\u4e0e\u9a8c\u8bc1\uff0c\u652f\u6301 {{webUrl}}\u3002',
+  promptRestoreAll: '\u6062\u590d\u6240\u6709\u63d0\u793a\u8bcd\u9ed8\u8ba4\u503c',
+  promptLabel: 'Codex \u64cd\u4f5c\u63d0\u793a\u8bcd',
+  promptHint: '\u8fd9\u662f Codex \u64cd\u4f5c\u63d0\u793a\u8bcd\u3002Persona \u548c DSH Core \u8bf4\u660e\u5728\u4e0a\u65b9\u5206\u522b\u7f16\u8f91\u3002',
   promptUnsaved: '\u672a\u4fdd\u5b58',
   promptDiscard: '\u653e\u5f03',
   promptSave: '\u4fdd\u5b58',
@@ -155,16 +178,9 @@ function promptFromLayer(layer: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function hasPromptOverride(layer: unknown): boolean {
-  return typeof layer === 'object'
-    && layer !== null
-    && !Array.isArray(layer)
-    && Object.hasOwn(layer, 'systemPrompt')
-}
-
 type BooleanCapabilitySetting = Exclude<
   keyof CodexSettings,
-  'fast' | 'contextWindow' | 'systemPrompt'
+  'fast' | 'contextWindow' | 'persona' | 'harnessSourcePrompt' | 'webSurfacePrompt' | 'systemPrompt'
 >
 
 interface CapabilityToggleProps {
@@ -206,6 +222,94 @@ function CapabilityToggle({
   )
 }
 
+interface CapabilityGroupProps {
+  label: string
+  children: ReactNode
+  accent: string
+}
+
+/** Visually separate capability scope while keeping the host's light settings style. */
+function CapabilityGroup({ label, children, accent }: CapabilityGroupProps) {
+  return (
+    <section style={{
+      display: 'grid',
+      gap: 4,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, paddingLeft: 2 }}>
+        <span aria-hidden="true" style={{
+          width: 6,
+          height: 6,
+          flex: '0 0 auto',
+          borderRadius: 999,
+          background: accent,
+        }} />
+        <strong style={{
+          color: 'var(--dsw-alias-label-secondary)',
+          fontSize: 14,
+          fontWeight: 600,
+          letterSpacing: '0.01em',
+        }}>
+          {label}
+        </strong>
+      </div>
+      <div style={{
+        display: 'grid',
+        marginLeft: 5,
+        paddingLeft: 12,
+      }}>
+        {children}
+      </div>
+    </section>
+  )
+}
+
+interface PromptEditorProps {
+  id: string
+  label: string
+  hint: string
+  value: string
+  writable: boolean
+  saving: boolean
+  minHeight: number
+  onChange: (value: string) => void
+}
+
+function PromptEditor({
+  id, label, hint, value, writable, saving, minHeight, onChange,
+}: PromptEditorProps) {
+  return (
+    <div style={{ display: 'grid', gap: 5 }}>
+      <label htmlFor={id} style={{ fontSize: 13, fontWeight: 500 }}>
+        {label}
+      </label>
+      <textarea
+        id={id}
+        value={value}
+        disabled={!writable || saving}
+        onChange={event => { onChange(event.target.value) }}
+        spellCheck={false}
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          minHeight,
+          resize: 'vertical',
+          padding: 10,
+          border: '1px solid var(--dsw-alias-border-l2)',
+          borderRadius: 8,
+          background: 'var(--dsw-alias-bg-layer-3)',
+          color: 'var(--dsw-alias-label-primary)',
+          font: 'inherit',
+          fontSize: 12,
+          lineHeight: 1.5,
+        }}
+      />
+      <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, lineHeight: 1.45 }}>
+        {hint}
+      </span>
+    </div>
+  )
+}
+
 /** Full-prompt editor contributed to Settings > Plugins. */
 export function PromptSettingsCard(
   props: PropsRuntime<'settings.plugin.item'>
@@ -220,10 +324,12 @@ export function PromptSettingsCard(
     user?: unknown
     writable: boolean
   })
+  const currentPersona = snapshot.value?.persona ?? DEFAULT_CODEX_PERSONA
+  const currentSourcePrompt = snapshot.value?.harnessSourcePrompt ?? DEFAULT_DSH_CORE_SOURCE_PROMPT
+  const currentWebPrompt = snapshot.value?.webSurfacePrompt ?? DEFAULT_DSH_CORE_WEB_PROMPT
   const current = snapshot.value?.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT
   const inherited = promptFromLayer(snapshot.base) ?? DEFAULT_CODEX_SYSTEM_PROMPT
-  const overridden = hasPromptOverride(snapshot.user)
-  const capabilities: Array<{
+  const codexOnlyCapabilities: Array<{
     field: BooleanCapabilitySetting
     label: CodexKey
     hint: CodexKey
@@ -232,24 +338,61 @@ export function PromptSettingsCard(
     { field: 'terminalToolsEnabled', label: 'capabilityTerminal', hint: 'capabilityTerminalHint' },
     { field: 'patchToolEnabled', label: 'capabilityPatch', hint: 'capabilityPatchHint' },
     { field: 'planToolEnabled', label: 'capabilityPlan', hint: 'capabilityPlanHint' },
+  ]
+  const otherCapabilities: Array<{
+    field: BooleanCapabilitySetting
+    label: CodexKey
+    hint: CodexKey
+  }> = [
     { field: 'hostedWebSearchEnabled', label: 'capabilityWebSearch', hint: 'capabilityWebSearchHint' },
     { field: 'remoteCompactionEnabled', label: 'capabilityCompaction', hint: 'capabilityCompactionHint' },
     { field: 'activityIndicatorEnabled', label: 'capabilityActivity', hint: 'capabilityActivityHint' },
   ]
   const [open, setOpen] = useState(false)
+  const [personaDraft, setPersonaDraft] = useState(currentPersona)
+  const [sourcePromptDraft, setSourcePromptDraft] = useState(currentSourcePrompt)
+  const [webPromptDraft, setWebPromptDraft] = useState(currentWebPrompt)
   const [draft, setDraft] = useState(current)
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
 
-  useEffect(() => { setDraft(current) }, [current])
+  useEffect(() => {
+    setPersonaDraft(currentPersona)
+    setSourcePromptDraft(currentSourcePrompt)
+    setWebPromptDraft(currentWebPrompt)
+    setDraft(current)
+  }, [current, currentPersona, currentSourcePrompt, currentWebPrompt])
   if (snapshot.status === 'unavailable') return null
 
-  const dirty = draft !== current
+  const dirty = personaDraft !== currentPersona
+    || sourcePromptDraft !== currentSourcePrompt
+    || webPromptDraft !== currentWebPrompt
+    || draft !== current
+  const renderCapability = (capability: {
+    field: BooleanCapabilitySetting
+    label: CodexKey
+    hint: CodexKey
+  }) => (
+    <CapabilityToggle
+      key={capability.field}
+      field={capability.field}
+      label={t(capability.label)}
+      hint={t(capability.hint)}
+      enabled={snapshot.value?.[capability.field] ?? true}
+      disabled={!snapshot.writable || saving}
+      setSetting={setSetting}
+    />
+  )
   const save = async (): Promise<void> => {
     setSaving(true)
     setFailed(false)
     try {
-      await setSetting('systemPrompt', draft)
+      await Promise.all([
+        setSetting('persona', personaDraft),
+        setSetting('harnessSourcePrompt', sourcePromptDraft),
+        setSetting('webSurfacePrompt', webPromptDraft),
+        setSetting('systemPrompt', draft),
+      ])
     } catch {
       setFailed(true)
     } finally {
@@ -259,11 +402,20 @@ export function PromptSettingsCard(
   const reset = async (): Promise<void> => {
     setSaving(true)
     setFailed(false)
+    setPersonaDraft(DEFAULT_CODEX_PERSONA)
+    setSourcePromptDraft(DEFAULT_DSH_CORE_SOURCE_PROMPT)
+    setWebPromptDraft(DEFAULT_DSH_CORE_WEB_PROMPT)
     setDraft(inherited)
     try {
       await unsetSetting('systemPrompt')
+      await unsetSetting('persona')
+      await unsetSetting('harnessSourcePrompt')
+      await unsetSetting('webSurfacePrompt')
     } catch {
       setFailed(true)
+      setPersonaDraft(currentPersona)
+      setSourcePromptDraft(currentSourcePrompt)
+      setWebPromptDraft(currentWebPrompt)
       setDraft(current)
     } finally {
       setSaving(false)
@@ -325,79 +477,78 @@ export function PromptSettingsCard(
               {t('promptReadOnly')}
             </p>
           )}
-          <strong style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
-            {t('capabilitiesLabel')}
-          </strong>
-          <div style={{ display: 'grid', marginBottom: 14 }}>
-            {capabilities.map(capability => (
-              <CapabilityToggle
-                key={capability.field}
-                field={capability.field}
-                label={t(capability.label)}
-                hint={t(capability.hint)}
-                enabled={snapshot.value?.[capability.field] ?? true}
-                disabled={!snapshot.writable || saving}
-                setSetting={setSetting}
-              />
-            ))}
+          <div style={{ display: 'grid', gap: 16, marginBottom: 14 }}>
+            <CapabilityGroup
+              label={t('codexOnlyCapabilitiesLabel')}
+              accent="var(--dsw-static-blue-500)"
+            >
+              {codexOnlyCapabilities.map(renderCapability)}
+            </CapabilityGroup>
+            <CapabilityGroup
+              label={t('otherCapabilitiesLabel')}
+              accent="var(--dsw-alias-label-tertiary)"
+            >
+              {otherCapabilities.map(renderCapability)}
+            </CapabilityGroup>
           </div>
           <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            marginBottom: 7,
+            display: 'grid',
+            gap: 14,
             paddingTop: 12,
             borderTop: '1px solid var(--dsw-alias-border-l2)',
           }}>
-            <label htmlFor="codex-system-prompt" style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>
-              {t('promptLabel')}
-            </label>
-            {overridden && (
-              <>
-                <span style={{
-                  borderRadius: 999,
-                  padding: '1px 8px',
-                  background: 'var(--dsw-alias-bg-module-platform)',
-                  color: 'var(--dsw-alias-label-secondary)',
-                  fontSize: 11,
-                }}>
-                  {t('promptOverridden')}
-                </span>
-                <button
-                  type="button"
-                  disabled={!snapshot.writable || saving}
-                  onClick={() => { void reset() }}
-                  style={{ border: 0, background: 'none', color: 'var(--dsw-alias-label-secondary)', font: 'inherit', fontSize: 12, cursor: 'pointer' }}
-                >
-                  {t('promptReset')}
-                </button>
-              </>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <strong style={{ flex: 1, fontSize: 13 }}>{t('promptCustomizationLabel')}</strong>
+              <button
+                type="button"
+                disabled={!snapshot.writable || saving || !dirty}
+                onClick={() => { void reset() }}
+                style={{ border: 0, padding: 0, background: 'none', color: 'var(--dsw-alias-label-secondary)', font: 'inherit', fontSize: 11, cursor: 'pointer' }}
+              >
+                {t('promptRestoreAll')}
+              </button>
+            </div>
+            <PromptEditor
+              id="codex-persona"
+              label={t('personaLabel')}
+              hint={t('personaHint')}
+              value={personaDraft}
+              writable={snapshot.writable}
+              saving={saving}
+              minHeight={84}
+              onChange={setPersonaDraft}
+            />
+            <PromptEditor
+              id="codex-harness-source-prompt"
+              label={t('sourcePromptLabel')}
+              hint={t('sourcePromptHint')}
+              value={sourcePromptDraft}
+              writable={snapshot.writable}
+              saving={saving}
+              minHeight={100}
+              onChange={setSourcePromptDraft}
+            />
+            <PromptEditor
+              id="codex-web-surface-prompt"
+              label={t('webPromptLabel')}
+              hint={t('webPromptHint')}
+              value={webPromptDraft}
+              writable={snapshot.writable}
+              saving={saving}
+              minHeight={120}
+              onChange={setWebPromptDraft}
+            />
+            <PromptEditor
+              id="codex-system-prompt"
+              label={t('promptLabel')}
+              hint={t('promptHint')}
+              value={draft}
+              writable={snapshot.writable}
+              saving={saving}
+              minHeight={320}
+              onChange={setDraft}
+            />
           </div>
-          <textarea
-            id="codex-system-prompt"
-            value={draft}
-            disabled={!snapshot.writable || saving}
-            onChange={event => { setDraft(event.target.value) }}
-            spellCheck={false}
-            style={{
-              boxSizing: 'border-box',
-              width: '100%',
-              minHeight: 320,
-              resize: 'vertical',
-              padding: 12,
-              border: '1px solid var(--dsw-alias-border-l2)',
-              borderRadius: 8,
-              background: 'var(--dsw-alias-bg-layer-3)',
-              color: 'var(--dsw-alias-label-primary)',
-              fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
-              fontSize: 12,
-              lineHeight: 1.55,
-            }}
-          />
-          <p style={{ margin: '6px 0 12px', color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1.5 }}>
-            {t('promptHint')}
-          </p>
           <div style={{
             display: 'flex',
             justifyContent: 'flex-end',

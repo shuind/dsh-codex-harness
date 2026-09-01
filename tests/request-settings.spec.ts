@@ -110,6 +110,39 @@ describe('Codex request settings', () => {
     expect(result.sections.map(section => section.text).join('\n')).not.toContain('You are an AI agent powered by DeepSeek Harness.')
   })
 
+  it('applies editable Persona and DSH Core templates with runtime values', () => {
+    const result = applyCodexCapabilitySettings({
+      sections: [
+        { name: 'harness:identity', text: 'Harness' },
+        {
+          name: 'harness:source',
+          text: 'The DeepSeek Harness implementation checkout is at C:\\repo. The checkout location and current working directory are separate values.',
+        },
+        {
+          name: 'app:web-surface',
+          text: 'You are interacting with the user through the DeepSeek Harness Web GUI at http://127.0.0.1:3080. When the user refers to this page.',
+        },
+        { name: 'deployment:persona', text: 'Default Persona' },
+        { name: 'codex:base', text: 'Instructions' },
+      ],
+      contexts: [],
+      tools: [],
+      variables: { model: 'gpt-5.6-luna', cwd: 'C:\\workspace' },
+    }, {
+      ...CODEX_SETTINGS_ENTRY,
+      persona: 'You are {{model}} working in {{cwd}}.',
+      harnessSourcePrompt: 'Source checkout: {{sourceRoot}}.',
+      webSurfacePrompt: 'Use this GUI at {{webUrl}}.',
+    })
+
+    expect(result.sections.map(section => section.text)).toEqual([
+      'You are gpt-5.6-luna working in C:\\workspace.',
+      'Source checkout: C:\\repo.',
+      'Use this GUI at http://127.0.0.1:3080.',
+      'Instructions',
+    ])
+  })
+
   it('filters disabled Codex capabilities from the next prompt assembly', () => {
     const assembly = {
       sections: [

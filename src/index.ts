@@ -30,13 +30,24 @@ import {
   repairLegacyPiAiContextOverflow,
 } from './remote.ts'
 import { registerCodexActivityProjection } from './activity.ts'
-import { DEFAULT_CODEX_SYSTEM_PROMPT, resolveCodexSystemPrompt } from './prompt.ts'
+import {
+  DEFAULT_CODEX_PERSONA,
+  DEFAULT_CODEX_SYSTEM_PROMPT,
+  DEFAULT_DSH_CORE_SOURCE_PROMPT,
+  DEFAULT_DSH_CORE_WEB_PROMPT,
+  resolveCodexSystemPrompt,
+} from './prompt.ts'
 import {
   CODEX_SETTINGS_ENTRY, CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA,
 } from './settings.ts'
 import type { CodexSettings } from './settings.ts'
 
-export { DEFAULT_CODEX_SYSTEM_PROMPT } from './prompt.ts'
+export {
+  DEFAULT_CODEX_PERSONA,
+  DEFAULT_CODEX_SYSTEM_PROMPT,
+  DEFAULT_DSH_CORE_SOURCE_PROMPT,
+  DEFAULT_DSH_CORE_WEB_PROMPT,
+} from './prompt.ts'
 export { CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA } from './settings.ts'
 export type { CodexSettings } from './settings.ts'
 
@@ -64,6 +75,12 @@ export interface Config {
   remoteCompact?: boolean
   /** Complete plugin-owned Codex operating prompt. */
   systemPrompt?: string
+  /** Deployment Persona template. */
+  persona?: string
+  /** DSH Core source-checkout guidance template. */
+  harnessSourcePrompt?: string
+  /** DSH Core Web GUI guidance template. */
+  webSurfacePrompt?: string
 }
 
 /** Runtime configuration schema for the Codex tool bridge. */
@@ -77,6 +94,9 @@ export const Config: z<Config> = z.object({
   hostedWebSearch: z.boolean().default(true),
   remoteCompact: z.boolean().default(true),
   systemPrompt: z.string().default(DEFAULT_CODEX_SYSTEM_PROMPT),
+  persona: z.string().default(DEFAULT_CODEX_PERSONA),
+  harnessSourcePrompt: z.string().default(DEFAULT_DSH_CORE_SOURCE_PROMPT),
+  webSurfacePrompt: z.string().default(DEFAULT_DSH_CORE_WEB_PROMPT),
 })
 
 const LLM_PI_AI_SETTINGS = settingsNamespace('llm-pi-ai')
@@ -204,8 +224,20 @@ function watchConfiguredGptModels(ctx: Context): void {
 }
 
 /** Install the optional settings source used by requests and prompt assembly. */
-function installCodexSettings(ctx: Context, systemPrompt: string): { current: () => CodexSettings } {
-  const entry: CodexSettings = { ...CODEX_SETTINGS_ENTRY, systemPrompt }
+function installCodexSettings(
+  ctx: Context,
+  systemPrompt: string,
+  persona: string,
+  harnessSourcePrompt: string,
+  webSurfacePrompt: string,
+): { current: () => CodexSettings } {
+  const entry: CodexSettings = {
+    ...CODEX_SETTINGS_ENTRY,
+    systemPrompt,
+    persona,
+    harnessSourcePrompt,
+    webSurfacePrompt,
+  }
   const withDefaults = (value: CodexSettings | undefined): CodexSettings => ({
     ...entry,
     ...value,
@@ -333,6 +365,47 @@ export function normalizeCodexPromptAssembly(assembly: PromptAssembly): PromptAs
   }
 }
 
+function sectionText(assembly: PromptAssembly, name: string): string | undefined {
+  const section = assembly.sections.find(candidate => candidate.name === name)
+  return section?.text
+}
+
+function promptVariables(assembly: PromptAssembly): Record<string, string | undefined> {
+  const variables = { ...assembly.variables }
+  if (variables.sourceRoot === undefined) {
+    const source = sectionText(assembly, 'harness:source')
+    const match = source?.match(/^The DeepSeek Harness implementation checkout is at (.+?)\. The checkout location/u)
+    if (match?.[1] !== undefined) variables.sourceRoot = match[1]
+  }
+  if (variables.webUrl === undefined) {
+    const web = sectionText(assembly, 'app:web-surface')
+    const match = web?.match(/^You are interacting with the user through the DeepSeek Harness Web GUI at (.+?)\. When/u)
+    if (match?.[1] !== undefined) variables.webUrl = match[1]
+  }
+  return variables
+}
+
+function interpolateCodexPrompt(text: string, variables: Record<string, string | undefined>): string {
+  return text.replace(/\{\{([\w.-]+)\}\}/g, (whole, key: string) => variables[key] ?? whole)
+}
+
+/** Apply user-editable Persona and DSH Core runtime prompt templates. */
+function applyCodexPromptOverrides(assembly: PromptAssembly, settings: CodexSettings): PromptAssembly {
+  const variables = promptVariables(assembly)
+  const overrides: Record<string, string | undefined> = {
+    'deployment:persona': settings.persona,
+    'harness:source': settings.harnessSourcePrompt,
+    'app:web-surface': settings.webSurfacePrompt,
+  }
+  const sections = assembly.sections.map(section => {
+    const template = overrides[section.name]
+    return template === undefined
+      ? section
+      : { ...section, text: interpolateCodexPrompt(template, variables) }
+  })
+  return { ...assembly, sections, variables }
+}
+
 const CODEX_TOOL_NAMES = {
   terminalToolsEnabled: new Set(['exec_command', 'write_stdin']),
   patchToolEnabled: new Set(['apply_patch']),
@@ -352,7 +425,8 @@ export function applyCodexCapabilitySettings(
   const filtered = disabled.size === 0
     ? assembly
     : { ...assembly, tools: assembly.tools.filter(tool => !disabled.has(tool.name)) }
-  return settings.promptEnabled ? normalizeCodexPromptAssembly(filtered) : filtered
+  const withOverrides = applyCodexPromptOverrides(filtered, settings)
+  return settings.promptEnabled ? normalizeCodexPromptAssembly(withOverrides) : withOverrides
 }
 
 /** Build the complete plugin-owned prompt, preserving an intentional empty value. */
@@ -700,13 +774,22 @@ export function apply(ctx: Context, config: Config = {}): void {
     hostedWebSearch: config.hostedWebSearch ?? true,
     remoteCompact: config.remoteCompact ?? true,
     systemPrompt: config.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT,
+    persona: config.persona ?? DEFAULT_CODEX_PERSONA,
+    harnessSourcePrompt: config.harnessSourcePrompt ?? DEFAULT_DSH_CORE_SOURCE_PROMPT,
+    webSurfacePrompt: config.webSurfacePrompt ?? DEFAULT_DSH_CORE_WEB_PROMPT,
   }
   if (resolved.codexCore
     && ctx.fs.sandboxMode !== undefined
     && ctx.get('sandboxPolicy') === undefined) {
     throw new Error('codex: a sandboxing filesystem requires ctx.sandboxPolicy')
   }
-  const codexSettings = installCodexSettings(ctx, resolved.systemPrompt)
+  const codexSettings = installCodexSettings(
+    ctx,
+    resolved.systemPrompt,
+    resolved.persona,
+    resolved.harnessSourcePrompt,
+    resolved.webSurfacePrompt,
+  )
   const execConfig = { ...resolved, currentSettings: codexSettings.current }
 
   if (resolved.globalEnhancements) {

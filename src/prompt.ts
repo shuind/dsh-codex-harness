@@ -36,6 +36,24 @@ export const DEFAULT_CODEX_SYSTEM_PROMPT = String.raw`## General
 - Solve problems by thinking from first principles and at a higher level.
 `
 
+/** Default deployment Persona template used by the Codex preset. */
+export const DEFAULT_CODEX_PERSONA = String.raw`You are Codex, a coding agent based on the {{model}} model. Your working directory is {{cwd}}.`
+
+/** Default DSH Core source-checkout guidance template. */
+export const DEFAULT_DSH_CORE_SOURCE_PROMPT = String.raw`The DeepSeek Harness implementation checkout is at {{sourceRoot}}. The checkout location and current working directory are separate values and may differ; never infer the working directory from this path. Use pwd to determine the current working directory. Use this checkout only to inspect or extend DSH itself.`
+
+/** Default DSH Web runtime guidance template. */
+export const DEFAULT_DSH_CORE_WEB_PROMPT = [
+  'You are interacting with the user through the DeepSeek Harness Web GUI at {{webUrl}}.',
+  'When the user refers to "this page", "this GUI", or "this app" without naming another target, they mean this GUI.',
+  'The browser provides no implicit DOM, route, or screenshot context.',
+  'The client-plugin HMR receiver is active, but client-plugin changes reload without a refresh only while `pnpm run dev:web` is also running from this same checkout to rebuild their bundles; verify that watcher before promising automatic updates.',
+  'Every other change - the apps/web shell and plain packages - requires rebuilding the affected Web artifacts and verifying this existing URL after a page refresh.',
+  'Starting another server does not update this GUI.',
+  'The apps/web Vite entry builds the shell but is not a standalone application because only dsh web injects window.__DSH_BOOT__.',
+  'Do not start a replacement server unless the user asks; if one is needed, use a managed background job and verify its exact URL.',
+].join(' ')
+
 /** Resolve the full plugin-owned prompt, preserving intentional empty overrides. */
 export function resolveCodexSystemPrompt(systemPrompt?: string): string {
   return systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT
