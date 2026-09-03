@@ -1016,6 +1016,42 @@ describe('Codex tool catalog', () => {
     }
   })
 
+  it('repairs compaction overflow from the live setting when remote compaction is disabled', async () => {
+    const settings = {
+      get: (namespace: unknown) => namespace === CODEX_SETTINGS_NAMESPACE
+        ? { ...CODEX_SETTINGS_ENTRY, contextWindow: 400_000, remoteCompactionEnabled: false }
+        : { providers: { relay: { api: 'openai-responses', baseURL: 'https://relay.example/v1' } } },
+      update: async () => {},
+    }
+    const { listeners } = mount(settings)
+    const listener = listeners.get('llm/stream')?.[0]
+    expect(listener).toBeDefined()
+    const source = async function* () {
+      yield {
+        type: 'usage',
+        usage: { inputTokens: 867, outputTokens: 90, cacheReadTokens: 282_240 },
+      } as never
+      yield {
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: {
+            message: 'pi-ai detected context overflow for model "gpt-5.6-luna"',
+            code: 'CONTEXT_WINDOW_EXCEEDED',
+          },
+        },
+      } as never
+    }
+    const compaction = listener!({
+      provider: 'relay',
+      model: 'gpt-5.6-luna',
+      messages: [],
+      purpose: 'compaction',
+    }, source) as AsyncIterable<unknown>
+
+    expect((await collectChunks(compaction)).at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
   it('adds image and reasoning defaults only to GPT models', () => {
     expect(enrichCodexModel({ id: 'gpt-5.4' })).toMatchObject({
       input: ['text', 'image'],

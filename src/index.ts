@@ -41,6 +41,7 @@ import {
   CODEX_SETTINGS_ENTRY, CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA,
 } from './settings.ts'
 import type { CodexSettings } from './settings.ts'
+import { codexCompactionMode } from './compaction.ts'
 
 export {
   DEFAULT_CODEX_PERSONA,
@@ -391,15 +392,24 @@ function interpolateCodexPrompt(text: string, variables: Record<string, string |
 
 /** Apply user-editable Persona and DSH Core runtime prompt templates. */
 function applyCodexPromptOverrides(assembly: PromptAssembly, settings: CodexSettings): PromptAssembly {
-  const variables = promptVariables(assembly)
   const overrides: Record<string, string | undefined> = {
     'deployment:persona': settings.persona,
     'harness:source': settings.harnessSourcePrompt,
     'app:web-surface': settings.webSurfacePrompt,
   }
+  const defaults: Record<string, string> = {
+    'deployment:persona': DEFAULT_CODEX_PERSONA,
+    'harness:source': DEFAULT_DSH_CORE_SOURCE_PROMPT,
+    'app:web-surface': DEFAULT_DSH_CORE_WEB_PROMPT,
+  }
+  const hasCustomOverride = Object.entries(overrides).some(([name, text]) => (
+    text !== undefined && text !== defaults[name]
+  ))
+  if (!hasCustomOverride) return assembly
+  const variables = promptVariables(assembly)
   const sections = assembly.sections.map(section => {
     const template = overrides[section.name]
-    return template === undefined
+    return template === undefined || template === defaults[section.name]
       ? section
       : { ...section, text: interpolateCodexPrompt(template, variables) }
   })
@@ -808,19 +818,23 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
     ctx.on('llm/stream', ((options: any, next: any) => {
       const settings = codexSettings.current()
+      const contextWindow = options.contextWindow ?? settings.contextWindow
+      const compactionMode = codexCompactionMode()
       const legacySafeNext = () => repairLegacyPiAiContextOverflow(
         next(),
         options.model,
-        options.contextWindow,
+        contextWindow,
       )
-      if (resolved.remoteCompact
-        && settings.remoteCompactionEnabled
-        && options.purpose === 'compaction'
-        && isGptModel(options.model)) {
-        return remoteCompactStream(ctx, options, legacySafeNext, {
-          hostedWebSearch: resolved.hostedWebSearch && settings.hostedWebSearchEnabled,
-          customApplyPatch: settings.patchToolEnabled,
-        })
+      if (options.purpose === 'compaction' && isGptModel(options.model)) {
+        const useRemoteCompaction = compactionMode === 'remote'
+          || (compactionMode !== 'local' && resolved.remoteCompact && settings.remoteCompactionEnabled)
+        if (useRemoteCompaction) {
+          return remoteCompactStream(ctx, options, legacySafeNext, {
+            hostedWebSearch: resolved.hostedWebSearch && settings.hostedWebSearchEnabled,
+            customApplyPatch: settings.patchToolEnabled,
+          })
+        }
+        return legacySafeNext()
       }
       if (options.purpose === undefined && isGptModel(options.model)) {
         return repairLegacyPiAiContextOverflow(
@@ -830,7 +844,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             customApplyPatch: settings.patchToolEnabled,
           }),
           options.model,
-          options.contextWindow,
+          contextWindow,
         )
       }
       return next()

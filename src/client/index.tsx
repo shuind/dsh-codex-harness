@@ -21,6 +21,38 @@ import {
 import type { CodexActivity } from '../activity-types.ts'
 import { modelActivity, sameModelActivity } from './activity.ts'
 
+interface CompactCommandOption {
+  id: string
+  label: string
+  detail?: string
+}
+
+interface CompactCommandSession {
+  command(line: string): Promise<{
+    ok: true
+    value: { matched: boolean }
+  } | {
+    ok: false
+    error: { code: string; message: string }
+  }>
+}
+
+interface CompactCommandUi {
+  decorate(decoration: {
+    name: string
+    available(session: { sessionId: string }): boolean
+    ui: {
+      kind: 'popupSelect'
+      options(session: { sessionId: string }, signal: AbortSignal): Promise<readonly CompactCommandOption[]>
+      onSelect(option: CompactCommandOption, session: { sessionId: string }): void | Promise<void>
+    }
+  }): () => void
+}
+
+interface CompactCommandSessions {
+  binding(sessionId: string): { session: CompactCommandSession } | undefined
+}
+
 const NS = 'codex' as const
 const SETTINGS_NAMESPACE = 'codex'
 const FAST_FALLBACK_SLOT = 'conversation.input.right' as const
@@ -30,6 +62,7 @@ const DEFAULT_CONTEXT_WINDOW = 262_144
 
 interface CodexSettings {
   fast: boolean
+  fastModeControlEnabled: boolean
   contextWindow?: number
   persona?: string
   harnessSourcePrompt?: string
@@ -61,6 +94,12 @@ const en = {
   otherCapabilitiesLabel: 'Additional capabilities',
   capabilityPrompt: 'Codex operating prompt',
   capabilityPromptHint: 'Inject the editable instructions and persona-first prompt layout.',
+  capabilityFast: 'Fast mode control',
+  capabilityFastHint: 'Show the Fast mode switch beside the conversation composer.',
+  compactRemote: 'Remote compaction',
+  compactRemoteHint: 'Use the provider remote compaction endpoint first.',
+  compactLocal: 'Local compaction',
+  compactLocalHint: 'Use the DSH text-summary compaction engine directly.',
   capabilityTerminal: 'Terminal tools',
   capabilityTerminalHint: 'Expose exec_command and write_stdin.',
   capabilityPatch: 'Patch tool',
@@ -111,6 +150,12 @@ const zh = {
   otherCapabilitiesLabel: '\u5176\u4ed6\u80fd\u529b',
   capabilityPrompt: 'Codex \u64cd\u4f5c\u63d0\u793a\u8bcd',
   capabilityPromptHint: '\u6ce8\u5165\u53ef\u7f16\u8f91\u6307\u4ee4\uff0c\u5e76\u5c06 Persona \u653e\u5728\u63d0\u793a\u8bcd\u9996\u4f4d\u3002',
+  capabilityFast: '\u663e\u793a Fast \u6a21\u5f0f',
+  capabilityFastHint: '\u5728\u5bf9\u8bdd\u8f93\u5165\u533a\u65c1\u663e\u793a Fast \u5f00\u5173\u3002',
+  compactRemote: '\u8fdc\u7a0b\u538b\u7f29',
+  compactRemoteHint: '\u4f18\u5148\u4f7f\u7528\u63d0\u4f9b\u5546\u7684\u8fdc\u7a0b\u538b\u7f29\u7aef\u70b9\u3002',
+  compactLocal: '\u672c\u5730\u538b\u7f29',
+  compactLocalHint: '\u76f4\u63a5\u4f7f\u7528 DSH \u6587\u672c\u6458\u8981\u538b\u7f29\u5f15\u64ce\u3002',
   capabilityTerminal: '\u7ec8\u7aef\u5de5\u5177',
   capabilityTerminalHint: '\u63d0\u4f9b exec_command \u548c write_stdin\u3002',
   capabilityPatch: '\u8865\u4e01\u5de5\u5177',
@@ -223,19 +268,40 @@ function CapabilityToggle({
 }
 
 interface CapabilityGroupProps {
+  id: string
   label: string
   children: ReactNode
   accent: string
 }
 
 /** Visually separate capability scope while keeping the host's light settings style. */
-function CapabilityGroup({ label, children, accent }: CapabilityGroupProps) {
+function CapabilityGroup({ id, label, children, accent }: CapabilityGroupProps) {
+  const [open, setOpen] = useState(false)
+  const panelId = `${id}-panel`
   return (
     <section style={{
       display: 'grid',
-      gap: 4,
+      gap: open ? 4 : 0,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, paddingLeft: 2 }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => { setOpen(!open) }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          width: '100%',
+          padding: 0,
+          border: 0,
+          background: 'none',
+          color: 'var(--dsw-alias-label-secondary)',
+          font: 'inherit',
+          textAlign: 'left',
+          cursor: 'pointer',
+        }}
+      >
         <span aria-hidden="true" style={{
           width: 6,
           height: 6,
@@ -251,14 +317,19 @@ function CapabilityGroup({ label, children, accent }: CapabilityGroupProps) {
         }}>
           {label}
         </strong>
-      </div>
-      <div style={{
-        display: 'grid',
-        marginLeft: 5,
-        paddingLeft: 12,
-      }}>
-        {children}
-      </div>
+        <span aria-hidden="true" style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 16 }}>
+          {open ? '-' : '+'}
+        </span>
+      </button>
+      {open && (
+        <div id={panelId} style={{
+          display: 'grid',
+          marginLeft: 5,
+          paddingLeft: 12,
+        }}>
+          {children}
+        </div>
+      )}
     </section>
   )
 }
@@ -277,35 +348,66 @@ interface PromptEditorProps {
 function PromptEditor({
   id, label, hint, value, writable, saving, minHeight, onChange,
 }: PromptEditorProps) {
+  const [open, setOpen] = useState(false)
+  const labelId = `${id}-label`
+  const panelId = `${id}-panel`
   return (
-    <div style={{ display: 'grid', gap: 5 }}>
-      <label htmlFor={id} style={{ fontSize: 13, fontWeight: 500 }}>
-        {label}
-      </label>
-      <textarea
-        id={id}
-        value={value}
-        disabled={!writable || saving}
-        onChange={event => { onChange(event.target.value) }}
-        spellCheck={false}
+    <div style={{ display: 'grid', gap: open ? 8 : 0 }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => { setOpen(!open) }}
         style={{
-          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
           width: '100%',
-          minHeight,
-          resize: 'vertical',
-          padding: 10,
-          border: '1px solid var(--dsw-alias-border-l2)',
-          borderRadius: 8,
-          background: 'var(--dsw-alias-bg-layer-3)',
+          padding: 0,
+          border: 0,
+          background: 'none',
           color: 'var(--dsw-alias-label-primary)',
           font: 'inherit',
-          fontSize: 12,
-          lineHeight: 1.5,
+          fontSize: 13,
+          fontWeight: 500,
+          textAlign: 'left',
+          cursor: 'pointer',
         }}
-      />
-      <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, lineHeight: 1.45 }}>
-        {hint}
-      </span>
+      >
+        <span id={labelId} style={{ flex: 1 }}>{label}</span>
+        <span aria-hidden="true" style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 16 }}>
+          {open ? '-' : '+'}
+        </span>
+      </button>
+      {open && (
+        <div id={panelId} style={{ display: 'grid', gap: 5 }}>
+          <textarea
+            id={id}
+            aria-labelledby={labelId}
+            value={value}
+            disabled={!writable || saving}
+            onChange={event => { onChange(event.target.value) }}
+            spellCheck={false}
+            style={{
+              boxSizing: 'border-box',
+              width: '100%',
+              minHeight,
+              resize: 'vertical',
+              padding: 10,
+              border: '1px solid var(--dsw-alias-border-l2)',
+              borderRadius: 8,
+              background: 'var(--dsw-alias-bg-layer-3)',
+              color: 'var(--dsw-alias-label-primary)',
+              font: 'inherit',
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          />
+          <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, lineHeight: 1.45 }}>
+            {hint}
+          </span>
+        </div>
+      )}
     </div>
   )
 }
@@ -334,6 +436,7 @@ export function PromptSettingsCard(
     label: CodexKey
     hint: CodexKey
   }> = [
+    { field: 'fastModeControlEnabled', label: 'capabilityFast', hint: 'capabilityFastHint' },
     { field: 'promptEnabled', label: 'capabilityPrompt', hint: 'capabilityPromptHint' },
     { field: 'terminalToolsEnabled', label: 'capabilityTerminal', hint: 'capabilityTerminalHint' },
     { field: 'patchToolEnabled', label: 'capabilityPatch', hint: 'capabilityPatchHint' },
@@ -479,12 +582,14 @@ export function PromptSettingsCard(
           )}
           <div style={{ display: 'grid', gap: 16, marginBottom: 14 }}>
             <CapabilityGroup
+              id="codex-only-capabilities"
               label={t('codexOnlyCapabilitiesLabel')}
               accent="var(--dsw-static-blue-500)"
             >
               {codexOnlyCapabilities.map(renderCapability)}
             </CapabilityGroup>
             <CapabilityGroup
+              id="other-capabilities"
               label={t('otherCapabilitiesLabel')}
               accent="var(--dsw-alias-label-tertiary)"
             >
@@ -593,7 +698,9 @@ function FastModeFallback(
 ) {
   const { useSettings, setSetting, t } = props
   const snapshot = useSettings(state => state as { value?: CodexSettings; writable: boolean })
+  const visible = snapshot.value?.fastModeControlEnabled ?? true
   const fast = snapshot.value?.fast ?? false
+  if (!visible) return null
   return (
     <button
       type="button"
@@ -981,11 +1088,34 @@ function LegacyOverlay(props: LegacyOverlayProps) {
   )
 }
 
-export const inject = ['slots', 'locale', 'settingsScope']
+export const inject = ['commandUi', 'sessions', 'slots', 'locale', 'settingsScope']
 
 /** Mount request controls and the plugin settings card through shared slots. */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'codex client: dictionaries')
+  const commandUi = ctx.get('commandUi') as CompactCommandUi
+  const sessions = ctx.get('sessions') as unknown as CompactCommandSessions
+  const t = ctx.locale.bind(NS)
+  const sessionFor = (session: { sessionId: string }): CompactCommandSession | undefined =>
+    sessions.binding(session.sessionId)?.session
+  ctx.effect(() => commandUi.decorate({
+    name: 'compact',
+    available: session => sessionFor(session) !== undefined,
+    ui: {
+      kind: 'popupSelect',
+      options: async () => [
+        { id: 'remote', label: t('compactRemote'), detail: t('compactRemoteHint') },
+        { id: 'local', label: t('compactLocal'), detail: t('compactLocalHint') },
+      ],
+      onSelect: async (option, session) => {
+        const live = sessionFor(session)
+        if (live === undefined) throw new Error('this session is not materialized yet')
+        const result = await live.command(`/compact ${option.id}`)
+        if (!result.ok) throw new Error(`compact mode switch failed: ${result.error.code}: ${result.error.message}`)
+        if (!result.value.matched) throw new Error('the host offers no /compact command')
+      },
+    },
+  }), 'codex client: /compact mode picker')
   const settings = ctx.settingsScope.bind<CodexSettings>({ namespace: SETTINGS_NAMESPACE })
   const injected = () => ({
     hooks: { settings },

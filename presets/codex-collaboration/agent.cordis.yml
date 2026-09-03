@@ -77,7 +77,7 @@
         thresholdRatio: 0.95
 
     - id: command-compact
-      name: '@deepseek-ai/dsh-command-compact'
+      name: '@shuind/dsh-codex-harness/compact-command'
 
     - id: tool-result-pruner
       name: '@deepseek-ai/dsh-compaction-tool-result-pruner'

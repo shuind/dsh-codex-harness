@@ -7,7 +7,12 @@ describe('Codex client settings', () => {
     const injected: string[] = []
     apply({
       effect: () => undefined,
-      locale: { register: () => undefined },
+      get: (name: string) => name === 'commandUi'
+        ? { decorate: () => () => {} }
+        : name === 'sessions'
+          ? { binding: () => undefined }
+          : undefined,
+      locale: { register: () => undefined, bind: () => () => '' },
       settingsScope: {
         bind: () => ({ set: async () => {}, unset: async () => {} }),
       },

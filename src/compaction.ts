@@ -13,6 +13,24 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 type LlmService = NonNullable<Context['llm']>
 type CodexGenerateOptions = GenerateOptions & { contextWindow?: number }
 
+/** Per-command compaction preference propagated into the LLM stream seam. */
+export type CodexCompactionMode = 'remote' | 'local'
+
+const COMPACTION_MODE = new AsyncLocalStorage<CodexCompactionMode>()
+
+/** Run one manual compaction with an explicit local/remote preference. */
+export function runCodexCompactionMode<T>(
+  mode: CodexCompactionMode,
+  task: () => Promise<T>,
+): Promise<T> {
+  return COMPACTION_MODE.run(mode, task)
+}
+
+/** Read the explicit preference for the current compaction stream, if any. */
+export function codexCompactionMode(): CodexCompactionMode | undefined {
+  return COMPACTION_MODE.getStore()
+}
+
 const CODEX_SETTINGS_NAMESPACE = settingsNamespace('codex')
 
 interface CodexSettings {

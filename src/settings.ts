@@ -16,6 +16,8 @@ export const CODEX_SETTINGS_NAMESPACE = settingsNamespace('codex')
 export interface CodexSettings {
   /** Use the Responses priority service tier for GPT requests. */
   fast: boolean
+  /** Show the Fast mode switch in the conversation composer. */
+  fastModeControlEnabled: boolean
   /** Optional context capacity override, in tokens. */
   contextWindow?: number
   /** Deployment Persona template; supports the host's prompt variables. */
@@ -45,6 +47,7 @@ export interface CodexSettings {
 /** Default settings exposed even before a Codex session is opened. */
 export const CODEX_SETTINGS_ENTRY: CodexSettings = {
   fast: false,
+  fastModeControlEnabled: true,
   persona: DEFAULT_CODEX_PERSONA,
   harnessSourcePrompt: DEFAULT_DSH_CORE_SOURCE_PROMPT,
   webSurfacePrompt: DEFAULT_DSH_CORE_WEB_PROMPT,
@@ -60,6 +63,7 @@ export const CODEX_SETTINGS_ENTRY: CodexSettings = {
 
 export const CODEX_SETTINGS_SCHEMA: z<CodexSettings> = z.object({
   fast: z.boolean().default(false),
+  fastModeControlEnabled: z.boolean().default(true),
   contextWindow: z.number().step(1).min(1).max(CODEX_CONTEXT_MAX),
   persona: z.string().default(DEFAULT_CODEX_PERSONA),
   harnessSourcePrompt: z.string().default(DEFAULT_DSH_CORE_SOURCE_PROMPT),

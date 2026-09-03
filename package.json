@@ -1,6 +1,6 @@
 {
   "name": "@shuind/dsh-codex-harness",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Codex coding preset with customizable prompts and tools for DSH.",
   "type": "module",
   "main": "lib/index.js",
@@ -21,6 +21,10 @@
     "./compaction": {
       "types": "./lib/types/compaction.d.ts",
       "default": "./lib/compaction.js"
+    },
+    "./compact-command": {
+      "types": "./lib/types/compact-command.d.ts",
+      "default": "./lib/types/compact-command.js"
     },
     "./client": {
       "types": "./lib/types/client/index.d.ts",
@@ -74,6 +78,7 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-commands",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-settings-plugins"
       ],
@@ -90,9 +95,11 @@
     "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-commands": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-client-ui-settings-plugins": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-commands": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-compaction": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-compaction-basic": ">=0.1.0-rc.8",
     "@deepseek-ai/dsh-compaction-tool-result-pruner": ">=0.1.0-rc.8",
@@ -129,6 +136,12 @@
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-conversation": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-commands": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-commands": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-settings": {
