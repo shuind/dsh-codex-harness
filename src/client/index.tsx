@@ -217,12 +217,6 @@ interface InputSettingsControlInjected {
   unsetSetting: (field: string) => Promise<void>
 }
 
-function promptFromLayer(layer: unknown): string | undefined {
-  if (typeof layer !== 'object' || layer === null || Array.isArray(layer)) return undefined
-  const value = (layer as Record<string, unknown>)['systemPrompt']
-  return typeof value === 'string' ? value : undefined
-}
-
 type BooleanCapabilitySetting = Exclude<
   keyof CodexSettings,
   'fast' | 'contextWindow' | 'persona' | 'harnessSourcePrompt' | 'webSurfacePrompt' | 'systemPrompt'
@@ -418,7 +412,7 @@ export function PromptSettingsCard(
     & InjectFace<InputSettingsControlInjected>
     & PropsLocale<'codex'>,
 ) {
-  const { useSettings, setSetting, unsetSetting, t } = props
+  const { useSettings, setSetting, t } = props
   const snapshot = useSettings(state => state as {
     status: 'loading' | 'ready' | 'unavailable'
     value?: CodexSettings
@@ -430,7 +424,6 @@ export function PromptSettingsCard(
   const currentSourcePrompt = snapshot.value?.harnessSourcePrompt ?? DEFAULT_DSH_CORE_SOURCE_PROMPT
   const currentWebPrompt = snapshot.value?.webSurfacePrompt ?? DEFAULT_DSH_CORE_WEB_PROMPT
   const current = snapshot.value?.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT
-  const inherited = promptFromLayer(snapshot.base) ?? DEFAULT_CODEX_SYSTEM_PROMPT
   const codexOnlyCapabilities: Array<{
     field: BooleanCapabilitySetting
     label: CodexKey
@@ -508,12 +501,14 @@ export function PromptSettingsCard(
     setPersonaDraft(DEFAULT_CODEX_PERSONA)
     setSourcePromptDraft(DEFAULT_DSH_CORE_SOURCE_PROMPT)
     setWebPromptDraft(DEFAULT_DSH_CORE_WEB_PROMPT)
-    setDraft(inherited)
+    setDraft(DEFAULT_CODEX_SYSTEM_PROMPT)
     try {
-      await unsetSetting('systemPrompt')
-      await unsetSetting('persona')
-      await unsetSetting('harnessSourcePrompt')
-      await unsetSetting('webSurfacePrompt')
+      await Promise.all([
+        setSetting('persona', DEFAULT_CODEX_PERSONA),
+        setSetting('harnessSourcePrompt', DEFAULT_DSH_CORE_SOURCE_PROMPT),
+        setSetting('webSurfacePrompt', DEFAULT_DSH_CORE_WEB_PROMPT),
+        setSetting('systemPrompt', DEFAULT_CODEX_SYSTEM_PROMPT),
+      ])
     } catch {
       setFailed(true)
       setPersonaDraft(currentPersona)
@@ -670,7 +665,13 @@ export function PromptSettingsCard(
             <button
               type="button"
               disabled={!dirty || saving}
-              onClick={() => { setDraft(current); setFailed(false) }}
+              onClick={() => {
+                setPersonaDraft(currentPersona)
+                setSourcePromptDraft(currentSourcePrompt)
+                setWebPromptDraft(currentWebPrompt)
+                setDraft(current)
+                setFailed(false)
+              }}
               style={{ border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'none', color: 'inherit', padding: '5px 14px', font: 'inherit', cursor: 'pointer' }}
             >
               {t('promptDiscard')}
@@ -967,15 +968,28 @@ function findContextMeterDialog(): HTMLElement | null {
   return null
 }
 
+function isTurnStatus(status: HTMLElement): boolean {
+  return status.textContent?.includes('Deep diving...') === true
+    || status.className.toString().includes('turnStatus')
+}
+
+function hasLayout(status: HTMLElement): boolean {
+  const rect = status.getBoundingClientRect()
+  return rect.width > 0 && rect.height > 0
+}
+
+/** Prefer the actual Core turn status over unrelated global status nodes. */
+export function selectTurnStatus(statuses: readonly HTMLElement[]): HTMLElement | null {
+  const preferred = statuses.filter(isTurnStatus)
+  return preferred.findLast(hasLayout)
+    ?? preferred.at(-1)
+    ?? statuses.filter(status => status.closest('[data-chat-flow]') !== null).findLast(hasLayout)
+    ?? statuses.filter(status => status.closest('[data-chat-flow]') !== null).at(-1)
+    ?? null
+}
+
 function findTurnStatus(): HTMLElement | null {
-  let fallback: HTMLElement | null = null
-  for (const status of document.querySelectorAll<HTMLElement>('[role="status"]')) {
-    if (status.closest('[data-chat-flow]') === null) continue
-    fallback ??= status
-    if (status.textContent?.includes('Deep diving...') === true
-      || status.className.toString().includes('turnStatus')) return status
-  }
-  return fallback
+  return selectTurnStatus([...document.querySelectorAll<HTMLElement>('[role="status"]')])
 }
 
 function useTurnStatusPosition(target: HTMLElement | null): { left: number; top: number } | null {

@@ -16,7 +16,20 @@ type CodexGenerateOptions = GenerateOptions & { contextWindow?: number }
 /** Per-command compaction preference propagated into the LLM stream seam. */
 export type CodexCompactionMode = 'remote' | 'local'
 
-const COMPACTION_MODE = new AsyncLocalStorage<CodexCompactionMode>()
+/**
+ * The main plugin entry and the compact-command subpath can be evaluated as
+ * separate bundles. Keep their async context carrier on the process global so
+ * an explicit command mode reaches the global llm/stream listener.
+ */
+const COMPACTION_MODE_KEY = Symbol.for('shuind.dsh-codex-harness.compaction-mode')
+const COMPACTION_MODE = (() => {
+  const registry = globalThis as unknown as Record<PropertyKey, unknown>
+  const existing = registry[COMPACTION_MODE_KEY]
+  if (existing !== undefined) return existing as AsyncLocalStorage<CodexCompactionMode>
+  const storage = new AsyncLocalStorage<CodexCompactionMode>()
+  registry[COMPACTION_MODE_KEY] = storage
+  return storage
+})()
 
 /** Run one manual compaction with an explicit local/remote preference. */
 export function runCodexCompactionMode<T>(

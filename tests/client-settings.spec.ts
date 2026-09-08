@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { apply } from '../src/client/index.tsx'
+import { apply, selectTurnStatus } from '../src/client/index.tsx'
 import { isCodexPresetId } from '../src/context.ts'
 
 describe('Codex client settings', () => {
@@ -34,5 +34,17 @@ describe('Codex client settings', () => {
     expect(isCodexPresetId('codex')).toBe(true)
     expect(isCodexPresetId('codex-collaboration')).toBe(true)
     expect(isCodexPresetId('standard')).toBe(false)
+  })
+
+  it('anchors the activity indicator to the visible Core turn status', () => {
+    const status = (text: string, width: number, height: number, inFlow: boolean) => ({
+      textContent: text,
+      className: '',
+      getBoundingClientRect: () => ({ width, height }),
+      closest: () => inFlow ? {} : null,
+    } as unknown as HTMLElement)
+    const unrelated = status('Loading', 100, 20, true)
+    const turn = status('Deep diving...', 100, 26, false)
+    expect(selectTurnStatus([unrelated, turn])).toBe(turn)
   })
 })

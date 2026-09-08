@@ -40,6 +40,15 @@ const invocation = (rawInput: string) => ({
 })
 
 describe('Codex compact command', () => {
+  it('shares explicit mode across separately evaluated plugin entry modules', async () => {
+    const duplicateEntry = await import('../src/compaction.ts?duplicate-entry')
+    let observed: string | undefined
+    await duplicateEntry.runCodexCompactionMode('remote', async () => {
+      observed = codexCompactionMode()
+    })
+    expect(observed).toBe('remote')
+  })
+
   it.each([
     ['remote', 'remote'],
     [' local ', 'local'],
