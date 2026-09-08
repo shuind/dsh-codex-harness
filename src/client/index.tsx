@@ -464,6 +464,11 @@ export function PromptSettingsCard(
     || sourcePromptDraft !== currentSourcePrompt
     || webPromptDraft !== currentWebPrompt
     || draft !== current
+  const canRestore = dirty
+    || currentPersona !== DEFAULT_CODEX_PERSONA
+    || currentSourcePrompt !== DEFAULT_DSH_CORE_SOURCE_PROMPT
+    || currentWebPrompt !== DEFAULT_DSH_CORE_WEB_PROMPT
+    || current !== DEFAULT_CODEX_SYSTEM_PROMPT
   const renderCapability = (capability: {
     field: BooleanCapabilitySetting
     label: CodexKey
@@ -601,7 +606,7 @@ export function PromptSettingsCard(
               <strong style={{ flex: 1, fontSize: 13 }}>{t('promptCustomizationLabel')}</strong>
               <button
                 type="button"
-                disabled={!snapshot.writable || saving || !dirty}
+                disabled={!snapshot.writable || saving || !canRestore}
                 onClick={() => { void reset() }}
                 style={{ border: 0, padding: 0, background: 'none', color: 'var(--dsw-alias-label-secondary)', font: 'inherit', fontSize: 11, cursor: 'pointer' }}
               >
