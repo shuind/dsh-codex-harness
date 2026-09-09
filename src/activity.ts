@@ -1,7 +1,6 @@
 /** Host-side activity projection for the Codex status line. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { isTokenDelta } from '@deepseek-ai/dsh-llm/message'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm/types'
 import { z, type ZodType } from 'zod'
 import type { CodexActivity } from './activity-types.ts'
@@ -16,6 +15,25 @@ export interface CodexActivityEvent {
   type: string
   time: number
   data?: unknown
+}
+
+/**
+ * Whether a stream chunk carries visible model output.
+ *
+ * DSH 0.1.2 removed the runtime `isTokenDelta` helper from `dsh-llm/message`
+ * while keeping the StreamChunk vocabulary unchanged. Keep this small
+ * predicate local so the harness works with both the old and new DSH bundles.
+ */
+function isTokenDelta(chunk: StreamChunk): boolean {
+  switch (chunk.type) {
+    case 'text-delta':
+    case 'reasoning-delta':
+      return chunk.text !== ''
+    case 'tool-call-delta':
+      return chunk.argumentsDelta !== '' || chunk.name !== undefined
+    default:
+      return false
+  }
 }
 
 /** Only a non-empty model delta starts the reply phase; usage and finish frames do not. */
@@ -105,4 +123,3 @@ export function registerCodexActivityProjection(ctx: Context): void {
     (projectionCtx as ProjectionContext).sessionProjections.register(codexActivityProjection)
   })
 }
-
