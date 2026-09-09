@@ -1,6 +1,6 @@
 /** Browser controls for Codex requests and the editable operating prompt. */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -1130,14 +1130,66 @@ export function selectTurnStatus(statuses: readonly HTMLElement[]): HTMLElement 
     ?? null
 }
 
-function useLegacyHostTargets(): { contextDialog: HTMLElement | null } {
-  const [targets, setTargets] = useState<{ contextDialog: HTMLElement | null }>({ contextDialog: null })
+function findTurnStatus(): HTMLElement | null {
+  return selectTurnStatus([...document.querySelectorAll<HTMLElement>('[role="status"]')])
+}
+
+function useTurnStatusPosition(target: HTMLElement | null): { left: number; top: number } | null {
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
+
+  useLayoutEffect(() => {
+    if (target === null) {
+      setPosition(null)
+      return undefined
+    }
+    const update = (): void => {
+      if (!target.isConnected) {
+        setPosition(null)
+        return
+      }
+      const rect = target.getBoundingClientRect()
+      if (rect.width === 0 && rect.height === 0) {
+        setPosition(null)
+        return
+      }
+      setPosition({
+        left: Math.round(rect.right + 10),
+        top: Math.round(rect.top + (rect.height - 26) / 2),
+      })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update)
+    observer?.observe(target)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+      observer?.disconnect()
+    }
+  }, [target])
+
+  return position
+}
+
+function useLegacyHostTargets(): {
+  contextDialog: HTMLElement | null
+  turnStatus: HTMLElement | null
+} {
+  const [targets, setTargets] = useState<{
+    contextDialog: HTMLElement | null
+    turnStatus: HTMLElement | null
+  }>({ contextDialog: null, turnStatus: null })
 
   useEffect(() => {
     if (typeof document === 'undefined' || document.body === null) return undefined
     const refresh = (): void => {
-      const next = { contextDialog: findContextMeterDialog() }
-      setTargets(current => current.contextDialog === next.contextDialog ? current : next)
+      const next = {
+        contextDialog: findContextMeterDialog(),
+        turnStatus: findTurnStatus(),
+      }
+      setTargets(current => current.contextDialog === next.contextDialog
+        && current.turnStatus === next.turnStatus ? current : next)
     }
     refresh()
     const observer = new MutationObserver(refresh)
@@ -1155,9 +1207,10 @@ function useLegacyHostTargets(): { contextDialog: HTMLElement | null } {
 /** Bridges plugin UI into DOM sites rendered by the legacy conversation host. */
 function LegacyOverlay(props: LegacyOverlayProps) {
   const {
-    sessionId, useSessions, useProjection, useSettings, setSetting, unsetSetting, t,
+    sessionId, useSession, useSessions, useProjection, useSettings, setSetting, unsetSetting, t,
   } = props
-  const { contextDialog } = useLegacyHostTargets()
+  const { contextDialog, turnStatus } = useLegacyHostTargets()
+  const turnStatusPosition = useTurnStatusPosition(turnStatus)
   const contextWindow = contextWindowFromProjection(useProjection)
   return (
     <>
@@ -1174,20 +1227,20 @@ function LegacyOverlay(props: LegacyOverlayProps) {
         contextDialog,
         'codex-context-size',
       )}
+      {turnStatusPosition !== null && typeof document !== 'undefined' && document.body !== null && createPortal(
+        <ActivityLine
+          sessionId={sessionId}
+          useSession={useSession}
+          useSessions={useSessions}
+          useProjection={useProjection}
+          useSettings={useSettings}
+          t={t}
+          position={turnStatusPosition}
+        />,
+        document.body,
+        'codex-activity',
+      )}
     </>
-  )
-}
-
-type ActivityDockProps = PropsRuntime<'conversation.composer.dock'>
-  & InjectFace<InputSettingsControlInjected>
-  & PropsLocale<'codex'>
-
-/** Stable composer fallback for hosts whose transient turn-status node is absent. */
-function ActivityDock(props: ActivityDockProps) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, padding: '4px 10px' }}>
-      <ActivityLine {...props} />
-    </div>
   )
 }
 
@@ -1239,13 +1292,6 @@ export function apply(ctx: Context): void {
     locale: NS,
     inject: injected,
   }, ContextSizeFallback))
-  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-    name: 'conversation.composer.dock',
-    id: 'codex-activity-fallback',
-    order: 5,
-    locale: NS,
-    inject: injected,
-  }, ActivityDock))
   ctx.slots.inject(LEGACY_OVERLAY_SLOT, () => ctx.slots.register({
     name: LEGACY_OVERLAY_SLOT,
     id: 'codex-legacy-overlay',
