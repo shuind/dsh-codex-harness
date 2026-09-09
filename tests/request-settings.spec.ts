@@ -214,6 +214,23 @@ describe('Codex request settings', () => {
     expect(session.events).toHaveLength(eventCount)
   })
 
+  it('supports the snapshotEvents session API used by DSH 0.1.2', () => {
+    const events = [{ type: 'turn/start', seq: 1 }]
+    const appended: unknown[] = []
+    const session = {
+      snapshotEvents: () => events,
+      requestHeader: () => ({ config: { provider: 'relay', model: 'gpt-5.4' } }),
+      requestContext: () => undefined,
+      append: (...args: unknown[]) => { appended.push(args) },
+    } as never
+
+    syncCodexContextWindow(session, 400_000)
+    expect(appended).toEqual([[
+      'request/context',
+      { provider: 'relay', model: 'gpt-5.4', contextWindow: 400_000 },
+    ]])
+  })
+
   it('waits for request context publication before appending the projection override', async () => {
     const session = Session.create(SessionId('codex-context-event'))
     session.append('turn/start', { turn: 1 })

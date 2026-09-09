@@ -293,9 +293,22 @@ function installCodexSettings(
   return { current: () => withDefaults(source()) }
 }
 
+type SessionEvent = { type: string, seq: number }
+
+/** Read the event snapshot across the pre- and post-0.1.2 DSH session APIs. */
+function sessionEvents(session: Session): readonly SessionEvent[] {
+  const compatible = session as Session & {
+    snapshotEvents?: () => readonly SessionEvent[]
+    events?: readonly SessionEvent[]
+  }
+  if (typeof compatible.snapshotEvents === 'function') return compatible.snapshotEvents()
+  return compatible.events ?? []
+}
+
 function hasOpenTurn(session: Session): boolean {
-  const start = session.events.findLast(event => event.type === 'turn/start')
-  const end = session.events.findLast(event => event.type === 'turn/end')
+  const events = sessionEvents(session)
+  const start = events.findLast(event => event.type === 'turn/start')
+  const end = events.findLast(event => event.type === 'turn/end')
   return start !== undefined && (end === undefined || start.seq > end.seq)
 }
 
