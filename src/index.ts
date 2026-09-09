@@ -2,7 +2,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
@@ -100,7 +99,7 @@ export const Config: z<Config> = z.object({
   webSurfacePrompt: z.string().default(DEFAULT_DSH_CORE_WEB_PROMPT),
 })
 
-const LLM_PI_AI_SETTINGS = settingsNamespace('llm-pi-ai')
+const LLM_PI_AI_SETTINGS = 'llm-pi-ai' as const
 
 /** Codex request envelope with the plugin's provider-facing service-tier field. */
 export interface CodexRequestConfig extends LlmCallConfig {
@@ -243,17 +242,54 @@ function installCodexSettings(
     ...entry,
     ...value,
   })
-  const settings = ctx.get('settings')
-  if (settings?.get(CODEX_SETTINGS_NAMESPACE) !== undefined) {
-    return {
-      current: () => withDefaults(settings.get(CODEX_SETTINGS_NAMESPACE) as CodexSettings | undefined),
-    }
-  }
   let source: () => CodexSettings = () => entry
-  installSettingsSection(ctx, CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA, entry, {
-    setSource: (current) => { source = current },
-    onChange: () => {},
-  })
+  let attached = false
+  const attachSettings = (candidate: unknown): boolean => {
+    if (attached || candidate === undefined || candidate === null) return attached
+    const settings = candidate as {
+      get?: (namespace: unknown) => unknown
+      installSection?: (
+        owner: Context,
+        namespace: unknown,
+        schema: unknown,
+        base: CodexSettings,
+        hooks: { setSource: (current: () => CodexSettings) => void; onChange: () => void },
+      ) => void
+      register?: (
+        namespace: unknown,
+        schema: unknown,
+        options: { base: CodexSettings },
+      ) => { get: () => unknown }
+    }
+    if (typeof settings.get === 'function') {
+      const get = settings.get.bind(settings)
+      if (get(CODEX_SETTINGS_NAMESPACE) !== undefined) {
+        source = () => get(CODEX_SETTINGS_NAMESPACE) as CodexSettings
+        attached = true
+        return true
+      }
+    }
+    if (typeof settings.installSection === 'function') {
+      settings.installSection.call(settings, ctx, CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA, entry, {
+        setSource: (current) => { source = current },
+        onChange: () => {},
+      })
+      attached = true
+      return true
+    }
+    if (typeof settings.register === 'function') {
+      const scope = settings.register.call(settings, CODEX_SETTINGS_NAMESPACE, CODEX_SETTINGS_SCHEMA, { base: entry })
+      source = () => scope.get() as CodexSettings
+      attached = true
+      return true
+    }
+    return false
+  }
+  if (!attachSettings(ctx.get('settings'))) {
+    ctx.inject(['settings'], (settingsCtx) => {
+      attachSettings((settingsCtx as Context & { settings: unknown }).settings)
+    })
+  }
   return { current: () => withDefaults(source()) }
 }
 

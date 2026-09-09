@@ -8,7 +8,6 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 
 type LlmService = NonNullable<Context['llm']>
 type CodexGenerateOptions = GenerateOptions & { contextWindow?: number }
@@ -44,7 +43,7 @@ export function codexCompactionMode(): CodexCompactionMode | undefined {
   return COMPACTION_MODE.getStore()
 }
 
-const CODEX_SETTINGS_NAMESPACE = settingsNamespace('codex')
+const CODEX_SETTINGS_NAMESPACE = 'codex' as const
 
 interface CodexSettings {
   contextWindow?: number

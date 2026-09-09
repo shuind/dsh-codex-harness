@@ -1,7 +1,7 @@
 /** Shared host-side Codex settings contract. */
 
 import z from '@deepseek-ai/schemastery'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { CODEX_CONTEXT_MAX } from './context.ts'
 import {
   DEFAULT_CODEX_PERSONA,
@@ -11,7 +11,7 @@ import {
 } from './prompt.ts'
 
 /** Live Codex controls shared by the Web UI and agent layer. */
-export const CODEX_SETTINGS_NAMESPACE = settingsNamespace('codex')
+export const CODEX_SETTINGS_NAMESPACE = 'codex' as SettingsNamespace
 
 export interface CodexSettings {
   /** Use the Responses priority service tier for GPT requests. */

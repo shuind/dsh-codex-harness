@@ -241,10 +241,13 @@ describe('Codex request settings', () => {
         if (!services.includes('settings')) return
         callback({
           settings: {
-            register: () => ({
-              get: () => ({ fast: false, contextWindow: 400_000 }),
-              watch: () => {},
-            }),
+            installSection: (
+              _owner: unknown,
+              _namespace: unknown,
+              _schema: unknown,
+              _entry: unknown,
+              hooks: { setSource: (source: () => unknown) => void },
+            ) => hooks.setSource(() => ({ fast: false, contextWindow: 400_000 })),
           },
           effect: () => {},
         })
