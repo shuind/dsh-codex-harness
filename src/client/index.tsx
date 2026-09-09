@@ -1,6 +1,6 @@
 /** Browser controls for Codex requests and the editable operating prompt. */
 
-import { useEffect, useLayoutEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -11,7 +11,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import { CODEX_CONTEXT_MAX, CODEX_CONTEXT_UNIT } from '../context.ts'
+import { CODEX_CONTEXT_MAX, CODEX_CONTEXT_UNIT, isCodexPresetId } from '../context.ts'
 import {
   DEFAULT_CODEX_PERSONA,
   DEFAULT_CODEX_SYSTEM_PROMPT,
@@ -859,6 +859,143 @@ function ContextSizeControl({
   )
 }
 
+/** Detect the host meter so the fallback does not duplicate its ring button. */
+function hasHostContextMeter(): boolean {
+  if (typeof document === 'undefined') return false
+  return [...document.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="dialog"]')]
+    .some(button => button.querySelectorAll('circle').length >= 2)
+}
+
+function useHostContextMeter(): boolean {
+  const [available, setAvailable] = useState(false)
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || document.body === null) return undefined
+    const refresh = (): void => { setAvailable(hasHostContextMeter()) }
+    refresh()
+    const observer = new MutationObserver(refresh)
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['aria-expanded'],
+    })
+    return () => observer.disconnect()
+  }, [])
+
+  return available
+}
+
+type ContextFallbackProps = PropsRuntime<'conversation.input.right'>
+  & InjectFace<InputSettingsControlInjected>
+  & PropsLocale<'codex'>
+
+/** Keep context configuration reachable before the host has a pressure meter. */
+function ContextSizeFallback({
+  sessionId, useSessions, useProjection, useSettings, setSetting, unsetSetting, t,
+}: ContextFallbackProps) {
+  const agentPreset = useSessions(state => state.byId[sessionId]?.agentPreset)
+  const hostMeter = useHostContextMeter()
+  const contextWindow = contextWindowFromProjection(useProjection as LegacyOverlayProps['useProjection'])
+  const snapshot = useSettings(state => state as { value?: CodexSettings; writable: boolean })
+  const configured = snapshot.value?.contextWindow
+  const valueK = Math.min(
+    CODEX_CONTEXT_MAX / CODEX_CONTEXT_UNIT,
+    Math.max(1, Math.round((configured ?? contextWindow) / CODEX_CONTEXT_UNIT)),
+  )
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLSpanElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onPointerDown = (event: PointerEvent): void => {
+      if (event.target instanceof Node && rootRef.current?.contains(event.target) === true) return
+      setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  if (!isCodexPresetId(agentPreset) || hostMeter) return null
+  return (
+    <span ref={rootRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <button
+        type="button"
+        aria-label={`${t('contextSize')}: ${valueK}K`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        disabled={snapshot.writable === false}
+        title={t('contextSize')}
+        onMouseDown={event => { event.preventDefault() }}
+        onClick={() => { setOpen(value => !value) }}
+        style={{
+          boxSizing: 'border-box',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 3,
+          height: 28,
+          border: 0,
+          borderRadius: 7,
+          padding: '0 6px',
+          color: configured === undefined
+            ? 'var(--dsw-alias-label-secondary)'
+            : 'var(--dsw-static-blue-500)',
+          background: open ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
+          cursor: snapshot.writable === false ? 'default' : 'pointer',
+          font: 'inherit',
+          fontSize: 12,
+          lineHeight: '20px',
+          fontWeight: configured === undefined ? 400 : 600,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <span>{valueK}K</span>
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden>
+          <path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label={t('contextSize')}
+          style={{
+            position: 'absolute',
+            right: 0,
+            bottom: 'calc(100% + 8px)',
+            zIndex: 20,
+            boxSizing: 'border-box',
+            width: 300,
+            maxWidth: 'calc(100vw - 24px)',
+            padding: '10px 12px 12px',
+            border: '1px solid var(--dsw-alias-border-l2)',
+            borderRadius: 10,
+            color: 'var(--dsw-alias-label-primary)',
+            background: 'var(--dsw-alias-bg-base)',
+            boxShadow: 'var(--dsw-shadow-lv2)',
+          }}
+        >
+          <ContextSizeControl
+            contextWindow={contextWindow}
+            sessionId={sessionId}
+            useSessions={useSessions}
+            useSettings={useSettings}
+            setSetting={setSetting}
+            unsetSetting={unsetSetting}
+            t={t}
+          />
+        </div>
+      )}
+    </span>
+  )
+}
+
 type ActivityProps = Pick<
   LegacyOverlayProps,
   'sessionId' | 'useSession' | 'useSessions' | 'useProjection' | 'useSettings' | 't'
@@ -993,66 +1130,14 @@ export function selectTurnStatus(statuses: readonly HTMLElement[]): HTMLElement 
     ?? null
 }
 
-function findTurnStatus(): HTMLElement | null {
-  return selectTurnStatus([...document.querySelectorAll<HTMLElement>('[role="status"]')])
-}
-
-function useTurnStatusPosition(target: HTMLElement | null): { left: number; top: number } | null {
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
-
-  useLayoutEffect(() => {
-    if (target === null) {
-      setPosition(null)
-      return undefined
-    }
-    const update = (): void => {
-      if (!target.isConnected) {
-        setPosition(null)
-        return
-      }
-      const rect = target.getBoundingClientRect()
-      if (rect.width === 0 && rect.height === 0) {
-        setPosition(null)
-        return
-      }
-      setPosition({
-        left: Math.round(rect.right + 10),
-        top: Math.round(rect.top + (rect.height - 26) / 2),
-      })
-    }
-    update()
-    window.addEventListener('resize', update)
-    window.addEventListener('scroll', update, true)
-    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update)
-    observer?.observe(target)
-    return () => {
-      window.removeEventListener('resize', update)
-      window.removeEventListener('scroll', update, true)
-      observer?.disconnect()
-    }
-  }, [target])
-
-  return position
-}
-
-function useLegacyHostTargets(): {
-  contextDialog: HTMLElement | null
-  turnStatus: HTMLElement | null
-} {
-  const [targets, setTargets] = useState<{
-    contextDialog: HTMLElement | null
-    turnStatus: HTMLElement | null
-  }>({ contextDialog: null, turnStatus: null })
+function useLegacyHostTargets(): { contextDialog: HTMLElement | null } {
+  const [targets, setTargets] = useState<{ contextDialog: HTMLElement | null }>({ contextDialog: null })
 
   useEffect(() => {
     if (typeof document === 'undefined' || document.body === null) return undefined
     const refresh = (): void => {
-      const next = {
-        contextDialog: findContextMeterDialog(),
-        turnStatus: findTurnStatus(),
-      }
-      setTargets(current => current.contextDialog === next.contextDialog
-        && current.turnStatus === next.turnStatus ? current : next)
+      const next = { contextDialog: findContextMeterDialog() }
+      setTargets(current => current.contextDialog === next.contextDialog ? current : next)
     }
     refresh()
     const observer = new MutationObserver(refresh)
@@ -1070,10 +1155,9 @@ function useLegacyHostTargets(): {
 /** Bridges plugin UI into DOM sites rendered by the legacy conversation host. */
 function LegacyOverlay(props: LegacyOverlayProps) {
   const {
-    sessionId, useSession, useSessions, useProjection, useSettings, setSetting, unsetSetting, t,
+    sessionId, useSessions, useProjection, useSettings, setSetting, unsetSetting, t,
   } = props
-  const { contextDialog, turnStatus } = useLegacyHostTargets()
-  const turnStatusPosition = useTurnStatusPosition(turnStatus)
+  const { contextDialog } = useLegacyHostTargets()
   const contextWindow = contextWindowFromProjection(useProjection)
   return (
     <>
@@ -1090,20 +1174,20 @@ function LegacyOverlay(props: LegacyOverlayProps) {
         contextDialog,
         'codex-context-size',
       )}
-      {turnStatusPosition !== null && typeof document !== 'undefined' && document.body !== null && createPortal(
-        <ActivityLine
-          sessionId={sessionId}
-          useSession={useSession}
-          useSessions={useSessions}
-          useProjection={useProjection}
-          useSettings={useSettings}
-          t={t}
-          position={turnStatusPosition}
-        />,
-        document.body,
-        'codex-activity',
-      )}
     </>
+  )
+}
+
+type ActivityDockProps = PropsRuntime<'conversation.composer.dock'>
+  & InjectFace<InputSettingsControlInjected>
+  & PropsLocale<'codex'>
+
+/** Stable composer fallback for hosts whose transient turn-status node is absent. */
+function ActivityDock(props: ActivityDockProps) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, padding: '4px 10px' }}>
+      <ActivityLine {...props} />
+    </div>
   )
 }
 
@@ -1148,6 +1232,20 @@ export function apply(ctx: Context): void {
     locale: NS,
     inject: injected,
   }, FastModeFallback))
+  ctx.slots.inject(FAST_FALLBACK_SLOT, () => ctx.slots.register({
+    name: FAST_FALLBACK_SLOT,
+    id: 'codex-context-size-fallback',
+    order: 1,
+    locale: NS,
+    inject: injected,
+  }, ContextSizeFallback))
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
+    id: 'codex-activity-fallback',
+    order: 5,
+    locale: NS,
+    inject: injected,
+  }, ActivityDock))
   ctx.slots.inject(LEGACY_OVERLAY_SLOT, () => ctx.slots.register({
     name: LEGACY_OVERLAY_SLOT,
     id: 'codex-legacy-overlay',

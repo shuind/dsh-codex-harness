@@ -25,6 +25,8 @@ describe('Codex client settings', () => {
     } as never)
     expect(injected).toEqual([
       'conversation.input.right',
+      'conversation.input.right',
+      'conversation.composer.dock',
       'conversation.input.overlay',
       'settings.plugin.item',
     ])
