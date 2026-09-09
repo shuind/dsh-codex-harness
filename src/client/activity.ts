@@ -2,10 +2,11 @@
 
 import type { ConversationSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
 
-export type ActivitySessionSnapshot = Pick<
-  ConversationSnapshot,
-  'running' | 'partial' | 'runningCalls' | 'turnTimings'
-> & {
+export type ActivitySessionSnapshot = Pick<ConversationSnapshot, 'running'> & {
+  /** Optional because older/newer hosts can publish the shell snapshot before the chat slice. */
+  readonly partial?: ConversationSnapshot['partial']
+  readonly runningCalls?: ConversationSnapshot['runningCalls']
+  readonly turnTimings?: ConversationSnapshot['turnTimings']
   /** Optional for hosts that predate the assembled Chat snapshot. */
   readonly chat?: ConversationSnapshot['chat']
 }
@@ -29,7 +30,8 @@ export function sameModelActivity(
 
 /** Infer the request-phase clock from the existing conversation snapshot. */
 export function awaitingModelStartedAt(snapshot: ActivitySessionSnapshot): number | undefined {
-  if (!snapshot.running || snapshot.runningCalls.length > 0) return undefined
+  if (!snapshot.running || (snapshot.runningCalls?.length ?? 0) > 0) return undefined
+  if (snapshot.turnTimings === undefined) return undefined
   let latest: number | undefined
   for (const timing of snapshot.turnTimings.values()) {
     if (timing.endTime === undefined) latest = timing.startTime
@@ -39,13 +41,14 @@ export function awaitingModelStartedAt(snapshot: ActivitySessionSnapshot): numbe
 
 /** Infer the first non-empty model token timestamp from the current snapshot. */
 export function modelReplyStartedAt(snapshot: ActivitySessionSnapshot): number | undefined {
-  if (!snapshot.running || snapshot.runningCalls.length > 0) return undefined
+  if (!snapshot.running || (snapshot.runningCalls?.length ?? 0) > 0) return undefined
+  if (snapshot.turnTimings === undefined) return undefined
   let openTurn: { turn: number; startTime: number } | undefined
   for (const [turn, timing] of snapshot.turnTimings) {
     if (timing.endTime === undefined) openTurn = { turn, startTime: timing.startTime }
   }
   if (openTurn === undefined) return undefined
-  if (snapshot.partial !== null && snapshot.partial.turn === openTurn.turn) {
+  if (snapshot.partial !== undefined && snapshot.partial !== null && snapshot.partial.turn === openTurn.turn) {
     const partialReplyStartedAt = (snapshot.partial as PartialAssistantWithTiming).replyStartedAt
     if (partialReplyStartedAt !== undefined) return partialReplyStartedAt
   }

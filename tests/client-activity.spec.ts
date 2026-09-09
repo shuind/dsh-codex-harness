@@ -39,6 +39,17 @@ describe('Codex client activity fallback', () => {
       .toBeUndefined()
   })
 
+  it('survives a host snapshot published before its activity fields', () => {
+    const incomplete = snapshot({
+      partial: undefined,
+      runningCalls: undefined,
+      turnTimings: undefined,
+    })
+    expect(awaitingModelStartedAt(incomplete)).toBeUndefined()
+    expect(modelReplyStartedAt(incomplete)).toBeUndefined()
+    expect(modelActivity(incomplete)).toBeUndefined()
+  })
+
   it('compares selector results by phase and timestamp rather than object identity', () => {
     expect(sameModelActivity(
       { activity: 'requesting-model', startedAt: 123 },
