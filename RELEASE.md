@@ -10,6 +10,7 @@ For `@shuind/dsh-codex-harness`.
 - 不要直接修改 `$HOME/.dsh`、profile、运行时 bundle 或已安装的 `node_modules`。
 - 不要启动第二个 DSH Web 服务来验证修改；验证现有的 `http://127.0.0.1:3080` 即可。
 - 发布前只执行插件范围内的检查、测试、构建和 `pack --dry-run`；不要因为验证方便而更新运行环境。
+- 仓库通过 `packageManager` 固定 pnpm 9；运行发布命令时使用 `corepack pnpm`，避免被全局 pnpm shim 覆盖。
 - 如果插件需要宿主新增 slot 或宿主 bundle 修改，不能把宿主改动作为交付方案；应改为兼容当前宿主，或先向用户说明并等待明确授权。
 - 发布后只核对 npm 版本和发布内容；不要把“npm 已发布”当成“运行中的 DSH 已更新”。
 
@@ -28,10 +29,10 @@ Run from the repository directory:
 ```powershell
 npm whoami
 npm version <version> --no-git-tag-version
-pnpm run check
-pnpm test
-pnpm run build
-pnpm pack --dry-run
+corepack pnpm run check
+corepack pnpm test
+corepack pnpm run build
+corepack pnpm run pack:check
 git add package.json
 git commit -m "release: publish v<version>"
 git tag v<version>

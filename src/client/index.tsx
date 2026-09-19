@@ -201,7 +201,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'conversation.input.overlay': {
       kind: 'list'
       scope: 'session'
-      owner: Record<never, never>
     }
     'settings.plugin.item': {
       kind: 'keyed'

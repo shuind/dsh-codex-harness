@@ -14,10 +14,24 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add @shuind/dsh-codex-harness@0.2.1
+dsh plugin --profile web add @shuind/dsh-codex-harness@latest
 ```
 
 重启 Web，在 **Agent 预设** 中选择 **Codex 模式**，再创建会话。
+
+### 宿主版本
+
+Codex 模式使用 `@deepseek-ai/dsh-persona` 的 `prefix` 配置。宿主必须提供
+`@deepseek-ai/dsh-persona >=0.1.3-alpha.2`；当前的 DSH `0.1.5-rc.2` 满足此要求。
+更早的 persona 版本只接受 `text`，会在加载预设时报告缺少 `prefix`。
+
+### 已有自定义预设
+
+插件会自动更新未修改过且带有本插件管理标记的旧预设。包含用户修改的预设会保留，
+需要手动迁移：先备份 `$DSH_HOME/.agent-presets/codex-collaboration`，再打开其中的
+`agent.cordis.yml`，将 `@deepseek-ai/dsh-persona` 配置下的 `text:` 改为 `prefix:`，
+保留后面的提示词内容，然后重启 DSH 并重新选择 Codex 模式。若预设没有该管理标记，
+也应按同样步骤迁移；不要覆盖已有的自定义提示词。
 
 ## 配置
 

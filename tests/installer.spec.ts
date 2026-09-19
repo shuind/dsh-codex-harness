@@ -104,6 +104,56 @@ describe('Codex preset installer', () => {
     }
   })
 
+  it('migrates an unchanged legacy text preset through its managed marker', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-codex-'))
+    const legacy = join(root, 'legacy')
+    const target = join(root, 'target')
+    try {
+      cpSync(SOURCE, legacy, { recursive: true })
+      const legacyAgent = readFileSync(join(legacy, 'agent.cordis.yml'), 'utf8')
+        .replace('    prefix: >-', '    text: >-')
+      writeFileSync(join(legacy, 'agent.cordis.yml'), legacyAgent)
+      cpSync(legacy, target, { recursive: true })
+      writeFileSync(join(target, '.dsh-codex-harness-managed'), `${signature(target)}\n`)
+
+      installCodexPreset(target)
+
+      const migrated = readFileSync(join(target, 'agent.cordis.yml'), 'utf8')
+      expect(migrated).toContain('    prefix: >-')
+      expect(migrated).not.toContain('    text: >-')
+      expect(readFileSync(join(target, '.dsh-codex-harness-managed'), 'utf8').trim())
+        .toBe(signature(target))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves a customized legacy text preset during migration', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-codex-'))
+    const legacy = join(root, 'legacy')
+    const target = join(root, 'target')
+    try {
+      cpSync(SOURCE, legacy, { recursive: true })
+      const legacyAgent = readFileSync(join(legacy, 'agent.cordis.yml'), 'utf8')
+        .replace('    prefix: >-', '    text: >-')
+      writeFileSync(join(legacy, 'agent.cordis.yml'), legacyAgent)
+      cpSync(legacy, target, { recursive: true })
+      writeFileSync(join(target, '.dsh-codex-harness-managed'), `${signature(target)}\n`)
+      writeFileSync(join(target, 'preset.yml'), 'name: User Codex\ndescription: custom\norder: 5\n')
+
+      installCodexPreset(target)
+
+      expect(readFileSync(join(target, 'agent.cordis.yml'), 'utf8'))
+        .toContain('    text: >-')
+      expect(readFileSync(join(target, 'agent.cordis.yml'), 'utf8'))
+        .not.toContain('    prefix: >-')
+      expect(readFileSync(join(target, 'preset.yml'), 'utf8'))
+        .toBe('name: User Codex\ndescription: custom\norder: 5\n')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('removes only a recognized legacy mode', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-codex-'))
     const managed = join(root, 'managed')

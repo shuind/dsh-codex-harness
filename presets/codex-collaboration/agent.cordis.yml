@@ -5,7 +5,7 @@
   name: '@deepseek-ai/dsh-persona'
   config:
     # Keep identity, model, cwd, and runtime context in one persona section.
-    text: >-
+    prefix: >-
       You are Codex, a coding agent based on the {{model}} model. Your working directory is {{cwd}}.
     includeRuntimeContext: true
 
