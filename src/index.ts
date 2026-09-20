@@ -41,6 +41,8 @@ import {
 } from './settings.ts'
 import type { CodexSettings } from './settings.ts'
 import { codexCompactionMode } from './compaction.ts'
+import { CodexPresetEditor } from './preset-editor.ts'
+import { applyPromptSections, Config as PromptSectionsConfig } from './prompt-sections.ts'
 
 export {
   DEFAULT_CODEX_PERSONA,
@@ -54,6 +56,24 @@ export type { CodexSettings } from './settings.ts'
 export const name = 'codex'
 export const inject = ['tools', 'systemPrompt', 'shell', 'fs', 'llm', 'credentials', 'settings']
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
+
+/** Add the preset editor when DSH's optional user-preset service is available. */
+function installPresetEditor(ctx: Context): void {
+  // `agentPresets` is supplied by dsh-agent-presets and may be installed after
+  // this plugin. Waiting through inject keeps the Codex core usable on hosts
+  // without that optional service while still mounting the Remote as soon as
+  // the Web preset catalog becomes available.
+  ctx.inject(['agentPresets'], presetCtx => {
+    void (async () => {
+      try {
+        await presetCtx.plugin(CodexPresetEditor)
+      } catch (error) {
+        ctx.logger.warn('codex: preset editor is unavailable on this host')
+        ctx.logger.warn(error)
+      }
+    })()
+  })
+}
 
 /** Configuration for the Codex shell result bridge. */
 export interface Config {
@@ -75,6 +95,16 @@ export interface Config {
   remoteCompact?: boolean
   /** Complete plugin-owned Codex operating prompt. */
   systemPrompt?: string
+  /** Explicit per-preset operating prompt; overrides the shared prompt only. */
+  presetPrompt?: string
+  presetSections?: import('./prompt-sections.ts').Config
+  /** Per-preset Codex capability overrides. Omitted values follow shared settings. */
+  promptEnabled?: boolean
+  terminalToolsEnabled?: boolean
+  patchToolEnabled?: boolean
+  planToolEnabled?: boolean
+  hostedWebSearchEnabled?: boolean
+  remoteCompactionEnabled?: boolean
   /** Deployment Persona template. */
   persona?: string
   /** DSH Core source-checkout guidance template. */
@@ -94,6 +124,14 @@ export const Config: z<Config> = z.object({
   hostedWebSearch: z.boolean().default(true),
   remoteCompact: z.boolean().default(true),
   systemPrompt: z.string().default(DEFAULT_CODEX_SYSTEM_PROMPT),
+  presetPrompt: z.string(),
+  presetSections: PromptSectionsConfig,
+  promptEnabled: z.boolean(),
+  terminalToolsEnabled: z.boolean(),
+  patchToolEnabled: z.boolean(),
+  planToolEnabled: z.boolean(),
+  hostedWebSearchEnabled: z.boolean(),
+  remoteCompactionEnabled: z.boolean(),
   persona: z.string().default(DEFAULT_CODEX_PERSONA),
   harnessSourcePrompt: z.string().default(DEFAULT_DSH_CORE_SOURCE_PROMPT),
   webSurfacePrompt: z.string().default(DEFAULT_DSH_CORE_WEB_PROMPT),
@@ -516,7 +554,11 @@ type CapabilitySetting =
   | 'patchToolEnabled'
   | 'planToolEnabled'
 
-interface ExecToolConfig extends Required<Config> {
+interface ExecToolConfig {
+  defaultYieldTimeMs: number
+  pollYieldTimeMs: number
+  writeYieldTimeMs: number
+  maxOutputBytes: number
   currentSettings: () => CodexSettings
 }
 
@@ -821,8 +863,14 @@ function registerPlanTool(ctx: Context, currentSettings: () => CodexSettings): v
   }))
 }
 
+/** Explicit preset instructions win without changing shared tools or permissions. */
+export function withPresetPrompt(settings: CodexSettings, presetPrompt: string | undefined): CodexSettings {
+  return presetPrompt === undefined ? settings : { ...settings, systemPrompt: presetPrompt }
+}
+
 /** Mount the Codex prompt/tool layer inside one fixed agent preset. */
 export function apply(ctx: Context, config: Config = {}): void {
+  installPresetEditor(ctx)
   const resolved = {
     globalEnhancements: config.globalEnhancements ?? true,
     codexCore: config.codexCore ?? true,
@@ -842,13 +890,25 @@ export function apply(ctx: Context, config: Config = {}): void {
     && ctx.get('sandboxPolicy') === undefined) {
     throw new Error('codex: a sandboxing filesystem requires ctx.sandboxPolicy')
   }
-  const codexSettings = installCodexSettings(
+  const sharedSettings = installCodexSettings(
     ctx,
     resolved.systemPrompt,
     resolved.persona,
     resolved.harnessSourcePrompt,
     resolved.webSurfacePrompt,
   )
+  const codexSettings = { current: () => {
+    const shared = withPresetPrompt(sharedSettings.current(), config.presetPrompt)
+    return {
+      ...shared,
+      ...(config.promptEnabled === undefined ? {} : { promptEnabled: config.promptEnabled }),
+      ...(config.terminalToolsEnabled === undefined ? {} : { terminalToolsEnabled: config.terminalToolsEnabled }),
+      ...(config.patchToolEnabled === undefined ? {} : { patchToolEnabled: config.patchToolEnabled }),
+      ...(config.planToolEnabled === undefined ? {} : { planToolEnabled: config.planToolEnabled }),
+      ...(config.hostedWebSearchEnabled === undefined ? {} : { hostedWebSearchEnabled: config.hostedWebSearchEnabled }),
+      ...(config.remoteCompactionEnabled === undefined ? {} : { remoteCompactionEnabled: config.remoteCompactionEnabled }),
+    }
+  } }
   const execConfig = { ...resolved, currentSettings: codexSettings.current }
 
   if (resolved.globalEnhancements) {
@@ -902,7 +962,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   if (resolved.codexCore) {
     ctx.on('system-prompt/assemble', async (_assembly, _context, next) =>
-      applyCodexCapabilitySettings(await next(), codexSettings.current()))
+      applyPromptSections(applyCodexCapabilitySettings(await next(), codexSettings.current()), config.presetSections ?? {}))
     ctx.systemPrompt.section({
       name: 'codex:base',
       order: 10,

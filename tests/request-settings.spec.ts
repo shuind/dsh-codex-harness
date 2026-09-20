@@ -1,3 +1,4 @@
+import { applyPromptSections } from '../src/prompt-sections.ts'
 import { describe, expect, it } from 'vitest'
 import {
   apply,
@@ -13,6 +14,30 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { CODEX_SETTINGS_ENTRY } from '../src/settings.ts'
 
 describe('Codex request settings', () => {
+  it('keeps preset sections independent from shared overrides and preserves runtime and tool guidance', () => {
+    const original = {
+      sections: [
+        { name: 'deployment:persona', text: 'Original persona' },
+        { name: 'harness:source', text: 'Source' },
+        { name: 'app:web-surface', text: 'Web' },
+        { name: 'codex:base', text: 'Preset operating prompt' },
+        { name: 'tool:instructions', text: 'Keep tool guidance' },
+      ], contexts: [], tools: [], variables: { model: 'test-model', cwd: '/workspace', sourceRoot: '/dsh', webUrl: 'http://localhost' },
+    }
+    const shared = applyCodexCapabilitySettings(original, { ...CODEX_SETTINGS_ENTRY, persona: 'Shared persona', harnessSourcePrompt: 'Shared source' })
+    const preset = applyPromptSections(shared, { persona: 'Preset {{model}}', harnessSourcePrompt: 'Inspect {{sourceRoot}}', webSurfacePrompt: '' })
+    expect(preset.sections.map(s => s.text)).toEqual(['Preset test-model', 'Inspect /dsh', '', 'Preset operating prompt', 'Keep tool guidance'])
+    expect(preset.contexts).toBe(original.contexts)
+    expect(preset.tools).toBe(original.tools)
+    expect(original.sections[0]?.text).toBe('Original persona')
+    expect(applyPromptSections(original, {}).sections).toEqual(original.sections)
+  })
+  it('accepts per-preset Codex capability overrides', () => {
+    const preset = Config({ hostedWebSearchEnabled: false, remoteCompactionEnabled: false, planToolEnabled: false })
+    expect(preset.hostedWebSearchEnabled).toBe(false)
+    expect(preset.remoteCompactionEnabled).toBe(false)
+    expect(preset.planToolEnabled).toBe(false)
+  })
   it('uses the complete working-principles prompt by default and accepts a full replacement', () => {
     expect(Config().systemPrompt).toContain('## Working principles')
     const prompt = buildCodexSystemPrompt()

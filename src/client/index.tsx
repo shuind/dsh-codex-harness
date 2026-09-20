@@ -1,7 +1,6 @@
 /** Browser controls for Codex requests and the editable operating prompt. */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { Context } from '@deepseek-ai/cordis'
@@ -11,15 +10,16 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type {} from '@deepseek-ai/dsh-agent-presets/remote'
+import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
 import { CODEX_CONTEXT_MAX, CODEX_CONTEXT_UNIT, isCodexPresetId } from '../context.ts'
-import {
-  DEFAULT_CODEX_PERSONA,
-  DEFAULT_CODEX_SYSTEM_PROMPT,
-  DEFAULT_DSH_CORE_SOURCE_PROMPT,
-  DEFAULT_DSH_CORE_WEB_PROMPT,
-} from '../prompt.ts'
 import type { CodexActivity } from '../activity-types.ts'
 import { modelActivity, sameModelActivity } from './activity.ts'
+import presetEditorRemote from '../preset-editor-remote.ts'
+import { PresetManagerCard } from './preset-manager.tsx'
+import { presetEn, presetZh } from './preset-copy.ts'
+import type { PresetClientRemote, PresetManagerActions } from './preset-manager.tsx'
 
 interface CompactCommandOption {
   id: string
@@ -80,6 +80,7 @@ interface CodexSettings {
 type CodexScope = SettingsScope<CodexSettings>
 
 const en = {
+  ...presetEn,
   fast: 'Fast mode',
   fastOn: 'Fast mode on (priority tier)',
   fastOff: 'Fast mode off',
@@ -89,13 +90,10 @@ const en = {
   contextSizeDescription: 'Next request capacity in K tokens.',
   contextRestore: 'Restore model default',
   promptCardTitle: 'Codex Harness',
-  promptCardDescription: 'Choose Codex capabilities and customize the operating prompt.',
-  codexOnlyCapabilitiesLabel: 'Codex mode only',
-  otherCapabilitiesLabel: 'Additional capabilities',
+  promptCardDescription: 'Edit presets, Codex capabilities, and the operating prompt. Activity status is global.',
+  otherCapabilitiesLabel: 'Global capabilities',
   capabilityPrompt: 'Codex operating prompt',
   capabilityPromptHint: 'Inject the editable instructions and persona-first prompt layout.',
-  capabilityFast: 'Fast mode control',
-  capabilityFastHint: 'Show the Fast mode switch beside the conversation composer.',
   compactRemote: 'Remote compaction',
   compactRemoteHint: 'Use the provider remote compaction endpoint first.',
   compactLocal: 'Local compaction',
@@ -136,6 +134,7 @@ const en = {
 } as const
 
 const zh = {
+  ...presetZh,
   fast: 'Fast',
   fastOn: 'Fast mode on (priority tier)',
   fastOff: 'Fast mode off',
@@ -145,13 +144,10 @@ const zh = {
   contextSizeDescription: '\u8bbe\u7f6e\u4e0b\u6b21\u8bf7\u6c42\u7684\u4e0a\u4e0b\u6587\u5bb9\u91cf\uff0c\u5355\u4f4d\u4e3a K tokens\u3002',
   contextRestore: '\u6062\u590d\u6a21\u578b\u9ed8\u8ba4\u503c',
   promptCardTitle: 'Codex Harness',
-  promptCardDescription: '\u9009\u62e9 Codex \u80fd\u529b\u5e76\u81ea\u5b9a\u4e49\u5b8c\u6574\u7684\u64cd\u4f5c\u63d0\u793a\u8bcd\u3002',
-  codexOnlyCapabilitiesLabel: '\u4ec5\u5728 Codex \u6a21\u5f0f\u4e0b',
-  otherCapabilitiesLabel: '\u5176\u4ed6\u80fd\u529b',
+  promptCardDescription: '\u7f16\u8f91\u9884\u8bbe\u3001Codex \u80fd\u529b\u548c\u64cd\u4f5c\u63d0\u793a\u8bcd\uff0c\u6d3b\u52a8\u72b6\u6001\u662f\u5168\u5c40\u8bbe\u7f6e\u3002',
+  otherCapabilitiesLabel: '\u5168\u5c40\u80fd\u529b',
   capabilityPrompt: 'Codex \u64cd\u4f5c\u63d0\u793a\u8bcd',
   capabilityPromptHint: '\u6ce8\u5165\u53ef\u7f16\u8f91\u6307\u4ee4\uff0c\u5e76\u5c06 Persona \u653e\u5728\u63d0\u793a\u8bcd\u9996\u4f4d\u3002',
-  capabilityFast: '\u663e\u793a Fast \u6a21\u5f0f',
-  capabilityFastHint: '\u5728\u5bf9\u8bdd\u8f93\u5165\u533a\u65c1\u663e\u793a Fast \u5f00\u5173\u3002',
   compactRemote: '\u8fdc\u7a0b\u538b\u7f29',
   compactRemoteHint: '\u4f18\u5148\u4f7f\u7528\u63d0\u4f9b\u5546\u7684\u8fdc\u7a0b\u538b\u7f29\u7aef\u70b9\u3002',
   compactLocal: '\u672c\u5730\u538b\u7f29',
@@ -170,19 +166,19 @@ const zh = {
   capabilityActivityHint: '\u5728\u5bf9\u8bdd\u65c1\u663e\u793a\u8bf7\u6c42\u3001\u56de\u590d\u548c\u538b\u7f29\u72b6\u6001\u3002',
   promptCustomizationLabel: '\u63d0\u793a\u8bcd\u5b9a\u5236',
   personaLabel: 'Persona',
-  personaHint: '\u5b9a\u4e49 Agent \u7684\u8eab\u4efd\u4e0e\u89d2\u8272\uff0c\u652f\u6301 {{model}} \u548c {{cwd}}\u3002',
+  personaHint: '\u5b9a\u4e49 Agent \u7684\u8eab\u4efd\u4e0e\u89d2\u8272，\u652f\u6301 {{model}} \u548c {{cwd}}。',
   sourcePromptLabel: 'DSH Core \u6e90\u7801\u8bf4\u660e',
-  sourcePromptHint: '\u8bf4\u660e DSH \u6e90\u7801\u68c0\u51fa\u76ee\u5f55\u4e0e\u5de5\u4f5c\u76ee\u5f55\uff0c\u652f\u6301 {{sourceRoot}}\u3002',
+  sourcePromptHint: '\u8bf4\u660e DSH \u6e90\u7801\u68c0\u51fa\u76ee\u5f55\u4e0e\u5de5\u4f5c\u76ee\u5f55，\u652f\u6301 {{sourceRoot}}。',
   webPromptLabel: 'DSH Core Web \u8bf4\u660e',
-  webPromptHint: '\u8bf4\u660e Web GUI\u3001HMR\u3001\u6784\u5efa\u4e0e\u9a8c\u8bc1\uff0c\u652f\u6301 {{webUrl}}\u3002',
+  webPromptHint: '\u8bf4\u660e Web GUI、HMR、\u6784\u5efa\u4e0e\u9a8c\u8bc1，\u652f\u6301 {{webUrl}}。',
   promptRestoreAll: '\u6062\u590d\u6240\u6709\u63d0\u793a\u8bcd\u9ed8\u8ba4\u503c',
   promptLabel: 'Codex \u64cd\u4f5c\u63d0\u793a\u8bcd',
-  promptHint: '\u8fd9\u662f Codex \u64cd\u4f5c\u63d0\u793a\u8bcd\u3002Persona \u548c DSH Core \u8bf4\u660e\u5728\u4e0a\u65b9\u5206\u522b\u7f16\u8f91\u3002',
+  promptHint: '\u8fd9\u662f Codex \u64cd\u4f5c\u63d0\u793a\u8bcd。Persona \u548c DSH Core \u8bf4\u660e\u5728\u4e0a\u65b9\u5206\u522b\u7f16\u8f91。',
   promptUnsaved: '\u672a\u4fdd\u5b58',
   promptDiscard: '\u653e\u5f03',
   promptSave: '\u4fdd\u5b58',
   promptSaving: '\u4fdd\u5b58\u4e2d...',
-  promptSaveFailed: '\u63d0\u793a\u8bcd\u4fdd\u5b58\u5931\u8d25\u3002',
+  promptSaveFailed: '\u63d0\u793a\u8bcd\u4fdd\u5b58\u5931\u8d25。',
   promptExpand: '\u5c55\u5f00\u8bbe\u7f6e',
   promptCollapse: '\u6536\u8d77\u8bbe\u7f6e',
   promptReadOnly: '\u5f53\u524d\u8bbe\u7f6e\u6587\u4ef6\u4e3a\u53ea\u8bfb\u3002',
@@ -214,6 +210,7 @@ interface InputSettingsControlInjected {
   hooks: { settings: HostObservable<ReturnType<CodexScope['getSnapshot']>> }
   setSetting: (field: string, value: unknown) => Promise<void>
   unsetSetting: (field: string) => Promise<void>
+  presetManager: PresetManagerActions
 }
 
 type BooleanCapabilitySetting = Exclude<
@@ -260,439 +257,28 @@ function CapabilityToggle({
   )
 }
 
-interface CapabilityGroupProps {
-  id: string
-  label: string
-  children: ReactNode
-  accent: string
-}
-
-/** Visually separate capability scope while keeping the host's light settings style. */
-function CapabilityGroup({ id, label, children, accent }: CapabilityGroupProps) {
-  const [open, setOpen] = useState(false)
-  const panelId = `${id}-panel`
-  return (
-    <section style={{
-      display: 'grid',
-      gap: open ? 4 : 0,
-    }}>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => { setOpen(!open) }}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 7,
-          width: '100%',
-          padding: 0,
-          border: 0,
-          background: 'none',
-          color: 'var(--dsw-alias-label-secondary)',
-          font: 'inherit',
-          textAlign: 'left',
-          cursor: 'pointer',
-        }}
-      >
-        <span aria-hidden="true" style={{
-          width: 6,
-          height: 6,
-          flex: '0 0 auto',
-          borderRadius: 999,
-          background: accent,
-        }} />
-        <strong style={{
-          color: 'var(--dsw-alias-label-secondary)',
-          fontSize: 14,
-          fontWeight: 600,
-          letterSpacing: '0.01em',
-        }}>
-          {label}
-        </strong>
-        <span aria-hidden="true" style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 16 }}>
-          {open ? '-' : '+'}
-        </span>
-      </button>
-      {open && (
-        <div id={panelId} style={{
-          display: 'grid',
-          marginLeft: 5,
-          paddingLeft: 12,
-        }}>
-          {children}
-        </div>
-      )}
-    </section>
-  )
-}
-
-interface PromptEditorProps {
-  id: string
-  label: string
-  hint: string
-  value: string
-  writable: boolean
-  saving: boolean
-  minHeight: number
-  onChange: (value: string) => void
-}
-
-function PromptEditor({
-  id, label, hint, value, writable, saving, minHeight, onChange,
-}: PromptEditorProps) {
-  const [open, setOpen] = useState(false)
-  const labelId = `${id}-label`
-  const panelId = `${id}-panel`
-  return (
-    <div style={{ display: 'grid', gap: open ? 8 : 0 }}>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => { setOpen(!open) }}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          width: '100%',
-          padding: 0,
-          border: 0,
-          background: 'none',
-          color: 'var(--dsw-alias-label-primary)',
-          font: 'inherit',
-          fontSize: 13,
-          fontWeight: 500,
-          textAlign: 'left',
-          cursor: 'pointer',
-        }}
-      >
-        <span id={labelId} style={{ flex: 1 }}>{label}</span>
-        <span aria-hidden="true" style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 16 }}>
-          {open ? '-' : '+'}
-        </span>
-      </button>
-      {open && (
-        <div id={panelId} style={{ display: 'grid', gap: 5 }}>
-          <textarea
-            id={id}
-            aria-labelledby={labelId}
-            value={value}
-            disabled={!writable || saving}
-            onChange={event => { onChange(event.target.value) }}
-            spellCheck={false}
-            style={{
-              boxSizing: 'border-box',
-              width: '100%',
-              minHeight,
-              resize: 'vertical',
-              padding: 10,
-              border: '1px solid var(--dsw-alias-border-l2)',
-              borderRadius: 8,
-              background: 'var(--dsw-alias-bg-layer-3)',
-              color: 'var(--dsw-alias-label-primary)',
-              font: 'inherit',
-              fontSize: 12,
-              lineHeight: 1.5,
-            }}
-          />
-          <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, lineHeight: 1.45 }}>
-            {hint}
-          </span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** Full-prompt editor contributed to Settings > Plugins. */
+/** One editor per preset; only display preferences are global. */
 export function PromptSettingsCard(
-  props: PropsRuntime<'settings.plugin.item'>
-    & InjectFace<InputSettingsControlInjected>
-    & PropsLocale<'codex'>,
+  props: PropsRuntime<'settings.plugin.item'> & InjectFace<InputSettingsControlInjected> & PropsLocale<'codex'>,
 ) {
-  const { useSettings, setSetting, t } = props
-  const snapshot = useSettings(state => state as {
-    status: 'loading' | 'ready' | 'unavailable'
-    value?: CodexSettings
-    base?: unknown
-    user?: unknown
-    writable: boolean
-  })
-  const currentPersona = snapshot.value?.persona ?? DEFAULT_CODEX_PERSONA
-  const currentSourcePrompt = snapshot.value?.harnessSourcePrompt ?? DEFAULT_DSH_CORE_SOURCE_PROMPT
-  const currentWebPrompt = snapshot.value?.webSurfacePrompt ?? DEFAULT_DSH_CORE_WEB_PROMPT
-  const current = snapshot.value?.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT
-  const codexOnlyCapabilities: Array<{
-    field: BooleanCapabilitySetting
-    label: CodexKey
-    hint: CodexKey
-  }> = [
-    { field: 'fastModeControlEnabled', label: 'capabilityFast', hint: 'capabilityFastHint' },
-    { field: 'promptEnabled', label: 'capabilityPrompt', hint: 'capabilityPromptHint' },
-    { field: 'terminalToolsEnabled', label: 'capabilityTerminal', hint: 'capabilityTerminalHint' },
-    { field: 'patchToolEnabled', label: 'capabilityPatch', hint: 'capabilityPatchHint' },
-    { field: 'planToolEnabled', label: 'capabilityPlan', hint: 'capabilityPlanHint' },
-  ]
-  const otherCapabilities: Array<{
-    field: BooleanCapabilitySetting
-    label: CodexKey
-    hint: CodexKey
-  }> = [
-    { field: 'hostedWebSearchEnabled', label: 'capabilityWebSearch', hint: 'capabilityWebSearchHint' },
-    { field: 'remoteCompactionEnabled', label: 'capabilityCompaction', hint: 'capabilityCompactionHint' },
-    { field: 'activityIndicatorEnabled', label: 'capabilityActivity', hint: 'capabilityActivityHint' },
-  ]
+  const { useSettings, setSetting, presetManager, t } = props
+  const snapshot = useSettings(state => state as { status: string; value?: CodexSettings; writable: boolean })
   const [open, setOpen] = useState(false)
-  const [personaDraft, setPersonaDraft] = useState(currentPersona)
-  const [sourcePromptDraft, setSourcePromptDraft] = useState(currentSourcePrompt)
-  const [webPromptDraft, setWebPromptDraft] = useState(currentWebPrompt)
-  const [draft, setDraft] = useState(current)
-  const [saving, setSaving] = useState(false)
-  const [failed, setFailed] = useState(false)
-
-  useEffect(() => {
-    setPersonaDraft(currentPersona)
-    setSourcePromptDraft(currentSourcePrompt)
-    setWebPromptDraft(currentWebPrompt)
-    setDraft(current)
-  }, [current, currentPersona, currentSourcePrompt, currentWebPrompt])
   if (snapshot.status === 'unavailable') return null
-
-  const dirty = personaDraft !== currentPersona
-    || sourcePromptDraft !== currentSourcePrompt
-    || webPromptDraft !== currentWebPrompt
-    || draft !== current
-  const canRestore = dirty
-    || currentPersona !== DEFAULT_CODEX_PERSONA
-    || currentSourcePrompt !== DEFAULT_DSH_CORE_SOURCE_PROMPT
-    || currentWebPrompt !== DEFAULT_DSH_CORE_WEB_PROMPT
-    || current !== DEFAULT_CODEX_SYSTEM_PROMPT
-  const renderCapability = (capability: {
-    field: BooleanCapabilitySetting
-    label: CodexKey
-    hint: CodexKey
-  }) => (
-    <CapabilityToggle
-      key={capability.field}
-      field={capability.field}
-      label={t(capability.label)}
-      hint={t(capability.hint)}
-      enabled={snapshot.value?.[capability.field] ?? true}
-      disabled={!snapshot.writable || saving}
-      setSetting={setSetting}
-    />
-  )
-  const save = async (): Promise<void> => {
-    setSaving(true)
-    setFailed(false)
-    try {
-      await Promise.all([
-        setSetting('persona', personaDraft),
-        setSetting('harnessSourcePrompt', sourcePromptDraft),
-        setSetting('webSurfacePrompt', webPromptDraft),
-        setSetting('systemPrompt', draft),
-      ])
-    } catch {
-      setFailed(true)
-    } finally {
-      setSaving(false)
-    }
-  }
-  const reset = async (): Promise<void> => {
-    setSaving(true)
-    setFailed(false)
-    setPersonaDraft(DEFAULT_CODEX_PERSONA)
-    setSourcePromptDraft(DEFAULT_DSH_CORE_SOURCE_PROMPT)
-    setWebPromptDraft(DEFAULT_DSH_CORE_WEB_PROMPT)
-    setDraft(DEFAULT_CODEX_SYSTEM_PROMPT)
-    try {
-      await Promise.all([
-        setSetting('persona', DEFAULT_CODEX_PERSONA),
-        setSetting('harnessSourcePrompt', DEFAULT_DSH_CORE_SOURCE_PROMPT),
-        setSetting('webSurfacePrompt', DEFAULT_DSH_CORE_WEB_PROMPT),
-        setSetting('systemPrompt', DEFAULT_CODEX_SYSTEM_PROMPT),
-      ])
-    } catch {
-      setFailed(true)
-      setPersonaDraft(currentPersona)
-      setSourcePromptDraft(currentSourcePrompt)
-      setWebPromptDraft(currentWebPrompt)
-      setDraft(current)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <li style={{
-      listStyle: 'none',
-      border: '1px solid var(--dsw-alias-border-l2)',
-      borderRadius: 12,
-      background: open ? 'var(--dsw-alias-bg-layer-2)' : 'var(--dsw-alias-bg-layer-3)',
-      overflow: 'hidden',
-    }}>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-label={`${t(open ? 'promptCollapse' : 'promptExpand')}: ${t('promptCardTitle')}`}
-        onClick={() => { setOpen(!open) }}
-        style={{
-          width: '100%',
-          border: 0,
-          background: 'none',
-          color: 'inherit',
-          padding: '14px 16px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          textAlign: 'left',
-          cursor: 'pointer',
-          font: 'inherit',
-        }}
-      >
-        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <strong style={{ fontSize: 15, lineHeight: 1.4 }}>{t('promptCardTitle')}</strong>
-          <span style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 13, lineHeight: 1.5 }}>
-            {t('promptCardDescription')}
-          </span>
-        </span>
-        {dirty && (
-          <span style={{
-            borderRadius: 999,
-            padding: '1px 8px',
-            background: 'var(--dsw-alias-bg-module-platform)',
-            color: 'var(--dsw-alias-label-secondary)',
-            fontSize: 11,
-          }}>
-            {t('promptUnsaved')}
-          </span>
-        )}
-        <span aria-hidden="true" style={{ color: 'var(--dsw-alias-label-tertiary)', fontSize: 16 }}>
-          {open ? '-' : '+'}
-        </span>
-      </button>
-      {open && (
-        <div style={{ borderTop: '1px solid var(--dsw-alias-border-l2)', margin: '0 16px', padding: '12px 0' }}>
-          {!snapshot.writable && (
-            <p style={{ margin: '0 0 10px', color: 'var(--dsw-alias-label-tertiary)', fontSize: 12 }}>
-              {t('promptReadOnly')}
-            </p>
-          )}
-          <div style={{ display: 'grid', gap: 16, marginBottom: 14 }}>
-            <CapabilityGroup
-              id="codex-only-capabilities"
-              label={t('codexOnlyCapabilitiesLabel')}
-              accent="var(--dsw-static-blue-500)"
-            >
-              {codexOnlyCapabilities.map(renderCapability)}
-            </CapabilityGroup>
-            <CapabilityGroup
-              id="other-capabilities"
-              label={t('otherCapabilitiesLabel')}
-              accent="var(--dsw-alias-label-tertiary)"
-            >
-              {otherCapabilities.map(renderCapability)}
-            </CapabilityGroup>
-          </div>
-          <div style={{
-            display: 'grid',
-            gap: 14,
-            paddingTop: 12,
-            borderTop: '1px solid var(--dsw-alias-border-l2)',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <strong style={{ flex: 1, fontSize: 13 }}>{t('promptCustomizationLabel')}</strong>
-              <button
-                type="button"
-                disabled={!snapshot.writable || saving || !canRestore}
-                onClick={() => { void reset() }}
-                style={{ border: 0, padding: 0, background: 'none', color: 'var(--dsw-alias-label-secondary)', font: 'inherit', fontSize: 11, cursor: 'pointer' }}
-              >
-                {t('promptRestoreAll')}
-              </button>
-            </div>
-            <PromptEditor
-              id="codex-persona"
-              label={t('personaLabel')}
-              hint={t('personaHint')}
-              value={personaDraft}
-              writable={snapshot.writable}
-              saving={saving}
-              minHeight={84}
-              onChange={setPersonaDraft}
-            />
-            <PromptEditor
-              id="codex-harness-source-prompt"
-              label={t('sourcePromptLabel')}
-              hint={t('sourcePromptHint')}
-              value={sourcePromptDraft}
-              writable={snapshot.writable}
-              saving={saving}
-              minHeight={100}
-              onChange={setSourcePromptDraft}
-            />
-            <PromptEditor
-              id="codex-web-surface-prompt"
-              label={t('webPromptLabel')}
-              hint={t('webPromptHint')}
-              value={webPromptDraft}
-              writable={snapshot.writable}
-              saving={saving}
-              minHeight={120}
-              onChange={setWebPromptDraft}
-            />
-            <PromptEditor
-              id="codex-system-prompt"
-              label={t('promptLabel')}
-              hint={t('promptHint')}
-              value={draft}
-              writable={snapshot.writable}
-              saving={saving}
-              minHeight={320}
-              onChange={setDraft}
-            />
-          </div>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            alignItems: 'center',
-            gap: 8,
-            paddingTop: 12,
-            borderTop: '1px solid var(--dsw-alias-border-l2)',
-          }}>
-            {failed && (
-              <span role="status" style={{ flex: 1, color: 'var(--dsw-alias-label-error)', fontSize: 12 }}>
-                {t('promptSaveFailed')}
-              </span>
-            )}
-            <button
-              type="button"
-              disabled={!dirty || saving}
-              onClick={() => {
-                setPersonaDraft(currentPersona)
-                setSourcePromptDraft(currentSourcePrompt)
-                setWebPromptDraft(currentWebPrompt)
-                setDraft(current)
-                setFailed(false)
-              }}
-              style={{ border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'none', color: 'inherit', padding: '5px 14px', font: 'inherit', cursor: 'pointer' }}
-            >
-              {t('promptDiscard')}
-            </button>
-            <button
-              type="button"
-              disabled={!snapshot.writable || !dirty || saving}
-              onClick={() => { void save() }}
-              style={{ border: 0, borderRadius: 8, background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)', padding: '6px 14px', font: 'inherit', cursor: 'pointer' }}
-            >
-              {saving ? t('promptSaving') : t('promptSave')}
-            </button>
-          </div>
-        </div>
-      )}
-    </li>
-  )
+  return <li style={{ listStyle: 'none', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 12, overflow: 'hidden' }}>
+    <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} style={{ width: '100%', padding: 16, textAlign: 'left', border: 0, background: 'none', color: 'inherit', cursor: 'pointer' }}>
+      <strong>{t('promptCardTitle')}</strong><span style={{ float: 'right' }}>{open ? '−' : '+'}</span>
+      <p style={{ marginBottom: 0 }}>{t('promptCardDescription')}</p>
+    </button>
+    {open && <div style={{ padding: 16, borderTop: '1px solid var(--dsw-alias-border-l2)' }}>
+      <PresetManagerCard presetManager={presetManager} t={t} />
+      <details style={{ marginTop: 22, borderTop: '1px solid var(--dsw-alias-border-l2)', paddingTop: 14 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{t('pmGlobalSettings')}</summary>
+        <CapabilityToggle field="activityIndicatorEnabled" label={t('capabilityActivity')} hint={t('capabilityActivityHint')}
+          enabled={snapshot.value?.activityIndicatorEnabled ?? true} disabled={!snapshot.writable} setSetting={setSetting} />
+      </details>
+    </div>}
+  </li>
 }
 
 /** The legacy composer seat is a compact inline row, not a menu panel. */
@@ -1243,7 +829,56 @@ function LegacyOverlay(props: LegacyOverlayProps) {
   )
 }
 
-export const inject = ['commandUi', 'sessions', 'slots', 'locale', 'settingsScope']
+export const inject = [
+  'commandUi', 'sessions', 'slots', 'locale', 'settingsScope',
+  'remote', 'remote.agentPresets', 'remote.settings',
+]
+
+function createPresetManager(ctx: Context): PresetManagerActions {
+  const remote = (ctx as unknown as { remote?: TypertClientRemote }).remote
+  const ready: Promise<void> = remote === undefined
+    ? Promise.resolve()
+    : remote.$mount(presetEditorRemote).then(dispose => {
+      ctx.effect(() => () => { void dispose() }, 'codex client: preset editor remote')
+    })
+  // Keep an unavailable optional host remote from becoming an unhandled rejection
+  // when the settings card is never opened. The card still awaits the same promise
+  // and renders the actual error if the user opens it.
+  void ready.catch(() => {})
+  return {
+    remote: remote as unknown as PresetClientRemote,
+    ready,
+  }
+}
+
+/**
+ * The Codex editor contribution is mounted by this client entry itself. Its
+ * namespace therefore cannot be a top-level dependency (that would make the
+ * entry wait for the contribution it is responsible for mounting). Wait for
+ * the namespace in a child fiber instead, and capture that protected Remote
+ * face for the settings card.
+ */
+function registerPresetSettingsCard(
+  ctx: Context,
+  settings: SettingsScope<CodexSettings>,
+  presetManager: PresetManagerActions,
+): () => void {
+  const settingsPresetManager: PresetManagerActions = {
+    ...presetManager,
+    remote: (ctx as unknown as { remote: PresetClientRemote }).remote,
+  }
+  return ctx.slots.inject(PLUGIN_SETTINGS_SLOT, () => ctx.slots.register({
+    name: PLUGIN_SETTINGS_SLOT,
+    key: SETTINGS_NAMESPACE,
+    locale: NS,
+    inject: () => ({
+      hooks: { settings },
+      setSetting: (field: string, value: unknown) => settings.set(field, value),
+      unsetSetting: (field: string) => settings.unset(field),
+      presetManager: settingsPresetManager,
+    }),
+  }, PromptSettingsCard))
+}
 
 /** Mount request controls and the plugin settings card through shared slots. */
 export function apply(ctx: Context): void {
@@ -1272,10 +907,12 @@ export function apply(ctx: Context): void {
     },
   }), 'codex client: /compact mode picker')
   const settings = ctx.settingsScope.bind<CodexSettings>({ namespace: SETTINGS_NAMESPACE })
+  const presetManager = createPresetManager(ctx)
   const injected = () => ({
     hooks: { settings },
     setSetting: (field: string, value: unknown) => settings.set(field, value),
     unsetSetting: (field: string) => settings.unset(field),
+    presetManager,
   })
   ctx.slots.inject(FAST_FALLBACK_SLOT, () => ctx.slots.register({
     name: FAST_FALLBACK_SLOT,
@@ -1298,12 +935,13 @@ export function apply(ctx: Context): void {
     locale: NS,
     inject: injected,
   }, LegacyOverlay))
-  ctx.slots.inject(PLUGIN_SETTINGS_SLOT, () => ctx.slots.register({
-    name: PLUGIN_SETTINGS_SLOT,
-    key: SETTINGS_NAMESPACE,
-    locale: NS,
-    inject: injected,
-  }, PromptSettingsCard))
+  // `codexPresetEditor` is mounted by createPresetManager above. Keep its
+  // namespace dependency local to the settings card so the main client entry
+  // can start and perform that mount first.
+  ctx.inject(
+    ['remote', 'remote.agentPresets', 'remote.settings', 'remote.codexPresetEditor'],
+    settingsCtx => registerPresetSettingsCard(settingsCtx, settings, presetManager),
+  )
 }
 
 export default { inject, apply }

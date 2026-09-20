@@ -48,6 +48,16 @@ export default defineConfig([
     clean: false,
   },
   {
+    entry: { typert: 'lib/types/typert.host.js' },
+    outDir: 'lib',
+    format: ['esm'],
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+  },
+  {
     entry: { client: 'lib/types/client/index.js' },
     outDir: 'lib',
     // DSH loads client plugins through a closure factory, not as native ESM.
