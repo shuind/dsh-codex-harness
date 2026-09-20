@@ -12,7 +12,7 @@ DSH Core 源码说明和 Web 说明是 Web 宿主注册的提示词段，不是 
 
 Plan 模式插件的提示词（例如 `planning / plan-mode · section`）不进入预设提示词编辑器；复制和保存保留原有 Plan 配置。
 
-没有额外的预设数据库。编辑器通过宿主的预设复制和安全写入服务保存名称、说明及 Codex 配置。加入 Codex 会保留原预设的身份和插件，并在副本内部挂载 Harness。`presetPrompt` 保存该预设的 Codex 工作指令，`presetSections` 保存其 Persona 和宿主说明覆盖。旧的全局 Codex 提示词在首次读取时作为迁移默认值，保存后的预设和副本独立持有各段文字。普通预设直接修改原有提示词字段，宿主说明由轻量的 `prompt-sections` 插件覆盖，不需要打开 Codex 工具。只有选择加入 Codex 时，才会解除 Persona 屏蔽追加提示词的限制，身份文本本身不变。
+没有额外的预设数据库。编辑器通过宿主的预设复制和安全写入服务保存名称、说明及 Codex 配置。加入 Codex 会保留原预设的身份和插件，并在副本内部挂载 Harness。`presetPrompt` 保存该预设的 Codex 工作指令，`presetSections` 保存其 Persona 和宿主说明覆盖。旧的全局 Codex 提示词在首次读取时作为迁移默认值，保存后的预设和副本独立持有各段文字。普通预设直接修改原有提示词字段，宿主说明由轻量的 `prompt-sections` 插件覆盖，不需要打开 Codex 工具。只有选择加入 Codex 时，才会解除 Persona 屏蔽追加提示词的限制；如果源预设原本没有宿主说明，副本会保留这一状态，身份文本本身不变。
 
 保存使用版本检查、文件锁和原子替换。失败会回滚，保存前的内容放在该目录下的 `.codex-editor-backup.json`。第三方插件的运行冲突仍需在新会话验证。
 

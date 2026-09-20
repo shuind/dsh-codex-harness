@@ -147,12 +147,15 @@ export function readPromptSections(content: string, shared: Partial<CodexSetting
   // These are host prompt sections, not Codex capability toggles. The Web
   // host registers them for non-complete agents unless the composition
   // explicitly shadows them (Story's clean-slate plugin does exactly that).
-  const hasHostSections = !complete && !suppressesHostSections(content)
-  if (hasHostSections) sections.splice(persona ? 1 : 0, 0,
-    { id: 'harness:source', label: 'DSH Core 源码说明', text: String(overrides?.get('harnessSourcePrompt') ?? (codex ? shared.harnessSourcePrompt : undefined) ?? DEFAULT_DSH_CORE_SOURCE_PROMPT), editable: true },
-    { id: 'app:web-surface', label: 'DSH Core Web 说明', text: String(overrides?.get('webSurfacePrompt') ?? (codex ? shared.webSurfacePrompt : undefined) ?? DEFAULT_DSH_CORE_WEB_PROMPT), editable: true })
+  const hostSections = !complete && !suppressesHostSections(content)
+    ? [
+        ...(overrides?.get('harnessSourcePrompt') === '' ? [] : [{ id: 'harness:source', label: 'DSH Core 源码说明', text: String(overrides?.get('harnessSourcePrompt') ?? (codex ? shared.harnessSourcePrompt : undefined) ?? DEFAULT_DSH_CORE_SOURCE_PROMPT), editable: true }]),
+        ...(overrides?.get('webSurfacePrompt') === '' ? [] : [{ id: 'app:web-surface', label: 'DSH Core Web 说明', text: String(overrides?.get('webSurfacePrompt') ?? (codex ? shared.webSurfacePrompt : undefined) ?? DEFAULT_DSH_CORE_WEB_PROMPT), editable: true }]),
+      ]
+    : []
+  if (hostSections.length) sections.splice(persona ? 1 : 0, 0, ...hostSections)
   if (codex) {
-    const index = persona ? (hasHostSections ? 3 : 1) : (hasHostSections ? 2 : 0)
+    const index = persona ? hostSections.length + 1 : hostSections.length
     sections.splice(index, 0, { id: 'codex:base', label: 'Codex 操作提示词', text: explicitPrompt(content) ?? shared.systemPrompt ?? DEFAULT_CODEX_SYSTEM_PROMPT, editable: true })
   }
   return sections
@@ -246,13 +249,19 @@ export function enhanceComposition(content: string): string {
   if (doc.contents.items.some(row => isMap(row) && (row as YAMLMap).get('name') === '@shuind/dsh-codex-harness')) throw new Error('ambiguous-harness-row')
   // A complete persona suppresses all contributed sections, including Codex's.
   // Keep its identity text while allowing the enhanced copy to compose prompts.
+  let wasCompletePersona = false
   for (const row of doc.contents.items) {
     if (!isMap(row) || (row as YAMLMap).get('name') !== '@deepseek-ai/dsh-persona') continue
     const persona = (row as YAMLMap).get('config', true)
-    if (isMap(persona) && persona.get('complete') === true) persona.set('complete', false)
+    if (isMap(persona) && persona.get('complete') === true) {
+      wasCompletePersona = true
+      persona.set('complete', false)
+    }
   }
+  const config: Record<string, unknown> = { globalEnhancements: false, codexCore: true }
+  if (wasCompletePersona) config.presetSections = { harnessSourcePrompt: '', webSurfacePrompt: '' }
   doc.add(doc.createNode({ id: `codex-harness-${randomUUID().slice(0, 8)}`,
-    name: '@shuind/dsh-codex-harness', config: { globalEnhancements: false, codexCore: true } }))
+    name: '@shuind/dsh-codex-harness', config }))
   return doc.toString({ lineWidth: 0 })
 }
 export function readPresetSystemPrompt(content: string): string {
