@@ -1127,8 +1127,8 @@ describe('Codex tool catalog', () => {
     ])
     expect(promptSections).toEqual(['codex:base'])
     expect(definitions.map(definition => definition.description)).toEqual([
-      'Runs a command in a PTY, returning output, a session ID for ongoing interaction, or a background job ID when requested.',
-      'Writes characters to an existing unified exec session and returns recent output.',
+      'Runs a shell command. By default it uses pipes: a running session can be polled for output but does not accept stdin. Set tty=true before starting a command that needs interactive input; background jobs use pipes.',
+      'Polls output from an existing unified exec session. Non-empty chars can be sent only to a session created with tty=true; pipe-backed sessions accept empty chars for polling only.',
       'Edits files using Codex patch syntax with Begin/End Patch markers and file update directives. In hunk lines, the first character is the operation marker; repeat a source-leading marker when the source line itself starts with one.',
       'Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.',
     ])

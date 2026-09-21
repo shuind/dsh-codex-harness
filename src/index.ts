@@ -531,8 +531,8 @@ export function buildCodexSystemPrompt(config: Pick<Config, 'systemPrompt'> = {}
   return resolveCodexSystemPrompt(config.systemPrompt)
 }
 
-const EXEC_COMMAND_DESCRIPTION = 'Runs a command in a PTY, returning output, a session ID for ongoing interaction, or a background job ID when requested.'
-const WRITE_STDIN_DESCRIPTION = 'Writes characters to an existing unified exec session and returns recent output.'
+const EXEC_COMMAND_DESCRIPTION = 'Runs a shell command. By default it uses pipes: a running session can be polled for output but does not accept stdin. Set tty=true before starting a command that needs interactive input; background jobs use pipes.'
+const WRITE_STDIN_DESCRIPTION = 'Polls output from an existing unified exec session. Non-empty chars can be sent only to a session created with tty=true; pipe-backed sessions accept empty chars for polling only.'
 const UPDATE_PLAN_DESCRIPTION =
   'Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.'
 
@@ -755,7 +755,7 @@ function registerExecTools(ctx: Context, config: ExecToolConfig): void {
     description: WRITE_STDIN_DESCRIPTION,
     parameters: {
       session_id: { type: 'number', required: true, description: 'Identifier of the running unified exec session.' },
-      chars: { type: 'string', description: 'Bytes to write to stdin. Defaults to empty, which polls without writing.' },
+      chars: { type: 'string', description: 'Characters to send to a PTY session created with tty=true. Leave empty to poll output without writing; pipe-backed sessions do not accept input.' },
       yield_time_ms: { type: 'number', description: 'Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default.' },
       max_output_tokens: { type: 'number', description: 'Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.' },
     },
