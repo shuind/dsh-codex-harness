@@ -727,27 +727,48 @@ function useTurnStatusPosition(target: HTMLElement | null): { left: number; top:
       setPosition(null)
       return undefined
     }
+    let frame: number | undefined
+    let previous: { left: number; top: number } | null = null
     const update = (): void => {
       if (!target.isConnected) {
-        setPosition(null)
         return
       }
       const rect = target.getBoundingClientRect()
       if (rect.width === 0 && rect.height === 0) {
+        if (previous !== null) {
+          previous = null
+          setPosition(null)
+        }
+        return
+      }
+      const next = {
+        left: Math.round(rect.right + 10),
+        top: Math.round(rect.top + (rect.height - 26) / 2),
+      }
+      if (previous?.left === next.left && previous.top === next.top) return
+      previous = next
+      setPosition(next)
+    }
+    const track = (): void => {
+      if (!target.isConnected) {
+        previous = null
         setPosition(null)
         return
       }
-      setPosition({
-        left: Math.round(rect.right + 10),
-        top: Math.round(rect.top + (rect.height - 26) / 2),
-      })
+      // Streaming rows can be inserted above the status without resizing the
+      // status element itself; a ResizeObserver alone would leave the overlay
+      // at its first position.
+      update()
+      frame = window.requestAnimationFrame(track)
     }
     update()
+    frame = window.requestAnimationFrame(track)
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update)
     observer?.observe(target)
     return () => {
+      if (frame !== undefined) window.cancelAnimationFrame(frame)
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
       observer?.disconnect()
