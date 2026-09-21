@@ -1,6 +1,6 @@
 {
   "name": "@shuind/dsh-codex-harness",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "packageManager": "pnpm@9.15.9",
   "description": "Codex coding preset with customizable prompts and tools for DSH.",
   "type": "module",
@@ -82,7 +82,7 @@
   "license": "MIT",
   "dsh": {
     "engines": {
-      "dsh": ">=0.1.5-rc.2"
+      "dsh": "0.1.5-rc.2"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
