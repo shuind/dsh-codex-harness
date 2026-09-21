@@ -656,7 +656,10 @@ export function ActivityLine({
           position: 'fixed' as const,
           left: position.left,
           top: position.top,
-          zIndex: 100,
+          // Keep the overlay in the conversation layer. The host composer is
+          // sticky at z-index 7, so this follows the same occlusion rule as
+          // the native Deep diving status instead of floating above the input.
+          zIndex: 0,
           pointerEvents: 'none' as const,
         }),
       }}
