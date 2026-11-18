@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Preset tools and prompts",
+    "description": "Configure tools and prompt overrides per preset without changing source definitions or other presets."
+  }
+}

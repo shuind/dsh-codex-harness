@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Codex Hybrid Executor",
+    "description": "Asymmetric tool executor keeping direct Codex tools natively on the wire while routing read/search tools through run_code SDK batching and progressive deferLoading activation."
+  }
+}

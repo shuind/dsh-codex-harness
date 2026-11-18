@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Codex 编码模式",
+    "description": "为 DeepSeek Harness 提供可自定义提示词的 Codex 预设、终端与补丁工具和 Responses 请求增强。"
+  }
+}

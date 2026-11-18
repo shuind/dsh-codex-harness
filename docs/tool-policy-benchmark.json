@@ -1,0 +1,310 @@
+{
+  "generatedAt": "2026-11-17T04:35:30.142Z",
+  "runtimeVersion": "0.2.2-rc.1",
+  "node": "v24.19.0",
+  "platform": "win32",
+  "arch": "x64",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics        ",
+  "samples": 1200,
+  "methodology": {
+    "setup": "Real Cordis scopes, ToolsService, native executor, official FS/search/pwsh/todo tool registrations and the actual tool-policy plugin; lightweight Agent owners and preset identity table, no AgentLoop/model/OS or file I/O.",
+    "baseline": "Eight native capabilities: read/write/edit/apply_patch/glob/grep/pwsh/todo_write. read_image excluded because no attachment store is mounted. All other Harness tools are held outside this subset.",
+    "probe": "Every timing case also carries the same constant-time probe, excluded from reported model schema totals. Dispatch is unlogged outside a model step; not a full AgentLoop/logging benchmark.",
+    "timing": "80 warm-ups; cases interleaved per sample; performance.now microseconds. Attach: 10 warm-ups + 50 samples. Assembly capped at 600 samples.",
+    "tokens": "JSON schema/body and assembled section text counted with js-tiktoken o200k_base. Not a claim about gpt-6.1-sol billing, TTFT, cache hits, or task success rate.",
+    "wire": "Illustrative Responses function-tool mapping plus actual plugin rewrite with 16 correlated apply_patch call/results; no HTTP request.",
+    "limits": "No React rendering, model latency, filesystem/OS process timing, permission interaction latency or process-memory savings measured."
+  },
+  "profiles": [
+    {
+      "id": "native",
+      "label": "原生工具",
+      "tools": [
+        "apply_patch",
+        "edit",
+        "glob",
+        "grep",
+        "pwsh",
+        "read",
+        "todo_write",
+        "write"
+      ],
+      "schema": {
+        "utf8Bytes": 9234,
+        "o200kBaseTokens": 1971
+      },
+      "promptSections": {
+        "utf8Bytes": 1281,
+        "o200kBaseTokens": 261
+      },
+      "illustrativeWire": {
+        "utf8Bytes": 12643,
+        "o200kBaseTokens": 2932
+      },
+      "timings": {
+        "resolveAndSchemas": {
+          "samples": 1200,
+          "medianUs": 130.6000000000722,
+          "p95Us": 161.3000000000966,
+          "meanUs": 136.49433333333042
+        },
+        "assemble": {
+          "samples": 600,
+          "medianUs": 292.40000000027067,
+          "p95Us": 348.700000000008,
+          "meanUs": 299.1345000000008
+        },
+        "nativeNoIoDispatch": {
+          "samples": 1200,
+          "medianUs": 129.90000000036162,
+          "p95Us": 184.49999999984357,
+          "meanUs": 140.313000000002
+        },
+        "rewrite16PatchHistoryCalls": {
+          "samples": 1200,
+          "medianUs": 17.899999999826832,
+          "p95Us": 36.50000000016007,
+          "meanUs": 20.67441666666961
+        },
+        "agentCreatedListener": {
+          "samples": 50,
+          "medianUs": 171.8999999998232,
+          "p95Us": 306.999999999789,
+          "meanUs": 194.28600000002007
+        }
+      }
+    },
+    {
+      "id": "stacked",
+      "label": "原生与 Codex 直接叠加",
+      "tools": [
+        "apply_patch",
+        "edit",
+        "exec_command",
+        "glob",
+        "grep",
+        "pwsh",
+        "read",
+        "todo_write",
+        "update_plan",
+        "write",
+        "write_stdin"
+      ],
+      "schema": {
+        "utf8Bytes": 12431,
+        "o200kBaseTokens": 2649
+      },
+      "promptSections": {
+        "utf8Bytes": 1281,
+        "o200kBaseTokens": 261
+      },
+      "illustrativeWire": {
+        "utf8Bytes": 15894,
+        "o200kBaseTokens": 3622
+      },
+      "timings": {
+        "resolveAndSchemas": {
+          "samples": 1200,
+          "medianUs": 224.19999999999618,
+          "p95Us": 290.8999999999651,
+          "meanUs": 234.36800000000247
+        },
+        "assemble": {
+          "samples": 600,
+          "medianUs": 314.7000000001299,
+          "p95Us": 388.30000000007203,
+          "meanUs": 322.90416666667164
+        },
+        "nativeNoIoDispatch": {
+          "samples": 1200,
+          "medianUs": 130.40000000000873,
+          "p95Us": 186.40000000004875,
+          "meanUs": 141.40566666667334
+        },
+        "rewrite16PatchHistoryCalls": {
+          "samples": 1200,
+          "medianUs": 17.90000000028158,
+          "p95Us": 36.90000000005966,
+          "meanUs": 21.09700000001112
+        },
+        "agentCreatedListener": {
+          "samples": 50,
+          "medianUs": 170.20000000002256,
+          "p95Us": 298.4999999998763,
+          "meanUs": 194.15799999996125
+        }
+      }
+    },
+    {
+      "id": "balanced",
+      "label": "保留文件工具，替换执行与计划",
+      "tools": [
+        "apply_patch",
+        "edit",
+        "exec_command",
+        "glob",
+        "grep",
+        "read",
+        "update_plan",
+        "write",
+        "write_stdin"
+      ],
+      "schema": {
+        "utf8Bytes": 8287,
+        "o200kBaseTokens": 1750
+      },
+      "promptSections": {
+        "utf8Bytes": 1608,
+        "o200kBaseTokens": 331
+      },
+      "illustrativeWire": {
+        "utf8Bytes": 11714,
+        "o200kBaseTokens": 2715
+      },
+      "timings": {
+        "resolveAndSchemas": {
+          "samples": 1200,
+          "medianUs": 150.10000000006585,
+          "p95Us": 188.70000000003984,
+          "meanUs": 156.98575000000096
+        },
+        "assemble": {
+          "samples": 600,
+          "medianUs": 302.7999999999338,
+          "p95Us": 375.2999999999247,
+          "meanUs": 309.8166666666611
+        },
+        "nativeNoIoDispatch": {
+          "samples": 1200,
+          "medianUs": 131.1000000000604,
+          "p95Us": 193.99999999995998,
+          "meanUs": 143.01783333332614
+        },
+        "rewrite16PatchHistoryCalls": {
+          "samples": 1200,
+          "medianUs": 17.899999999826832,
+          "p95Us": 35.600000000158616,
+          "meanUs": 20.390166666659677
+        },
+        "agentCreatedListener": {
+          "samples": 50,
+          "medianUs": 1655.999999999949,
+          "p95Us": 2804.5999999999367,
+          "meanUs": 1893.4619999999998
+        }
+      }
+    },
+    {
+      "id": "minimal",
+      "label": "极简对照（非推荐）",
+      "tools": [
+        "apply_patch",
+        "exec_command",
+        "update_plan",
+        "write_stdin"
+      ],
+      "schema": {
+        "utf8Bytes": 4383,
+        "o200kBaseTokens": 928
+      },
+      "promptSections": {
+        "utf8Bytes": 1095,
+        "o200kBaseTokens": 228
+      },
+      "illustrativeWire": {
+        "utf8Bytes": 7720,
+        "o200kBaseTokens": 1873
+      },
+      "timings": {
+        "resolveAndSchemas": {
+          "samples": 1200,
+          "medianUs": 90.30000000007021,
+          "p95Us": 115.0000000000091,
+          "meanUs": 95.22991666666775
+        },
+        "assemble": {
+          "samples": 600,
+          "medianUs": 225.6999999999607,
+          "p95Us": 278.00000000002,
+          "meanUs": 230.8479999999969
+        },
+        "nativeNoIoDispatch": {
+          "samples": 1200,
+          "medianUs": 129.60000000020955,
+          "p95Us": 187.20000000030268,
+          "meanUs": 139.95641666666566
+        },
+        "rewrite16PatchHistoryCalls": {
+          "samples": 1200,
+          "medianUs": 17.79999999962456,
+          "p95Us": 36.10000000026048,
+          "meanUs": 20.38699999999987
+        },
+        "agentCreatedListener": {
+          "samples": 50,
+          "medianUs": 1856.0999999999694,
+          "p95Us": 3093.5999999996966,
+          "meanUs": 2075.076000000017
+        }
+      }
+    },
+    {
+      "id": "shadow",
+      "label": "同名实现替换对照",
+      "tools": [
+        "apply_patch",
+        "edit",
+        "glob",
+        "grep",
+        "pwsh",
+        "read",
+        "todo_write",
+        "write"
+      ],
+      "schema": {
+        "utf8Bytes": 9234,
+        "o200kBaseTokens": 1971
+      },
+      "promptSections": {
+        "utf8Bytes": 1281,
+        "o200kBaseTokens": 261
+      },
+      "illustrativeWire": {
+        "utf8Bytes": 12643,
+        "o200kBaseTokens": 2932
+      },
+      "timings": {
+        "resolveAndSchemas": {
+          "samples": 1200,
+          "medianUs": 131.1000000000604,
+          "p95Us": 165.300000000002,
+          "meanUs": 137.56549999999967
+        },
+        "assemble": {
+          "samples": 600,
+          "medianUs": 294.1000000000713,
+          "p95Us": 367.60000000003856,
+          "meanUs": 301.1400000000026
+        },
+        "nativeNoIoDispatch": {
+          "samples": 1200,
+          "medianUs": 130.79999999990832,
+          "p95Us": 186.20000000009895,
+          "meanUs": 141.48541666665827
+        },
+        "rewrite16PatchHistoryCalls": {
+          "samples": 1200,
+          "medianUs": 17.899999999826832,
+          "p95Us": 36.3999999999578,
+          "meanUs": 20.6273333333354
+        },
+        "agentCreatedListener": {
+          "samples": 50,
+          "medianUs": 177.70000000018626,
+          "p95Us": 326.0000000000218,
+          "meanUs": 220.47199999999066
+        }
+      }
+    }
+  ]
+}

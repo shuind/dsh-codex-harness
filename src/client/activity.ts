@@ -1,18 +1,19 @@
 /** Client-only inference used while the host activity projection frame is in flight. */
 
-import type { ConversationSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
-
-export type ActivitySessionSnapshot = Pick<ConversationSnapshot, 'running'> & {
-  /** Optional because older/newer hosts can publish the shell snapshot before the chat slice. */
-  readonly partial?: ConversationSnapshot['partial']
-  readonly runningCalls?: ConversationSnapshot['runningCalls']
-  readonly turnTimings?: ConversationSnapshot['turnTimings']
-  /** Optional for hosts that predate the assembled Chat snapshot. */
-  readonly chat?: ConversationSnapshot['chat']
-}
-
-type PartialAssistantWithTiming = NonNullable<ActivitySessionSnapshot['partial']> & {
-  readonly replyStartedAt?: number
+/**
+ * The legacy conversation slice is no longer part of the current Session
+ * snapshot. Keep this fallback structural so both generations can load without
+ * depending on the removed dsh-client-runtime package.
+ */
+export interface ActivitySessionSnapshot {
+  readonly running: boolean
+  readonly partial?: { readonly turn: number; readonly replyStartedAt?: number | undefined } | null | undefined
+  readonly runningCalls?: readonly unknown[] | undefined
+  readonly turnTimings?: ReadonlyMap<number, { readonly startTime: number; readonly endTime?: number | undefined }> | undefined
+  readonly chat?: {
+    readonly timeline: { readonly turns: ReadonlyMap<number, { readonly steps: readonly { readonly step: number; readonly end?: unknown }[] }> }
+    readonly nodes: { values(): Iterable<{ readonly kind: string; readonly data: unknown }> }
+  } | undefined
 }
 
 export type CodexModelActivity = {
@@ -49,7 +50,7 @@ export function modelReplyStartedAt(snapshot: ActivitySessionSnapshot): number |
   }
   if (openTurn === undefined) return undefined
   if (snapshot.partial !== undefined && snapshot.partial !== null && snapshot.partial.turn === openTurn.turn) {
-    const partialReplyStartedAt = (snapshot.partial as PartialAssistantWithTiming).replyStartedAt
+    const partialReplyStartedAt = snapshot.partial.replyStartedAt
     if (partialReplyStartedAt !== undefined) return partialReplyStartedAt
   }
 
@@ -60,14 +61,15 @@ export function modelReplyStartedAt(snapshot: ActivitySessionSnapshot): number |
   const turn = chat?.timeline.turns.get(openTurn.turn)
   const step = turn?.steps.findLast(candidate => candidate.end === undefined)
   if (step === undefined) return undefined
-  for (const node of [...(chat?.nodes.values() ?? [])].reverse()) {
+  let matched: number | undefined
+  for (const node of chat?.nodes.values() ?? []) {
     if (node.kind !== 'assistant-step') continue
     const data = node.data as { turn?: unknown; step?: unknown; replyStartedAt?: unknown }
     if (data.turn === openTurn.turn && data.step === step.step && typeof data.replyStartedAt === 'number') {
-      return data.replyStartedAt
+      matched = data.replyStartedAt
     }
   }
-  return undefined
+  return matched
 }
 
 /** Infer the two-phase model activity from the current client snapshot. */

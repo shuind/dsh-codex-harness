@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Codex harness">
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#152238"/>
+  <path d="m23 19-13 13 13 13m18-26 13 13-13 13" fill="none" stroke="#8ce8cb" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m36 16-8 32" fill="none" stroke="#f6c978" stroke-width="4" stroke-linecap="round"/>
+</svg>

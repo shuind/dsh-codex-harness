@@ -1,0 +1,3 @@
+name: Codex 混合模式
+description: 原生补丁与终端交互配合 run_code 批量检索 SDK 及按需延迟加载的编码 Agent。
+order: 5
