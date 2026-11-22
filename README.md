@@ -2,17 +2,17 @@
 
 给 DeepSeek Harness（DSH）用的 Codex 风格插件：自带一套混合模式编码预设（`codex-hybrid`）和 Codex 常用工具，支持对任意预设按工具做启用 / 替换 / 延迟加载 / 隐藏，也可以单独调整预设提示词，并针对 OpenAI Responses API 与中转站补全了常用请求增强。
 
-当前版本 `0.3.0` 适配 **DeepSeek Harness `0.2.2-rc.1`–`0.2.2-rc.4`**（`engines.dsh: >=0.2.2-rc.1 <=0.2.2-rc.4`）。
+当前版本 `0.3.1` 适配 **DeepSeek Harness `0.2.2-rc.1`–`0.2.2-rc.5`**（`engines.dsh: >=0.2.2-rc.1 <=0.2.2-rc.5`）。
 
 ## 安装
 
 ### 从插件市场 / npm 安装
 
-在 Harness 的 **插件 → 添加插件** 中输入 `@shuind/dsh-codex-harness`（或指定 `@shuind/dsh-codex-harness@0.3.0`），安装后按提示重启 Harness 即可。
+在 Harness 的 **插件 → 添加插件** 中输入 `@shuind/dsh-codex-harness`（或指定 `@shuind/dsh-codex-harness@0.3.1`），安装后按提示重启 Harness 即可。
 
 ### 从离线包安装（GitHub Release）
 
-1. 在 [Releases](https://github.com/shuind/dsh-codex-harness/releases) 页面下载对应版本的 `.tgz` 安装包（如 `shuind-dsh-codex-harness-0.3.0.tgz`）。
+1. 在 [Releases](https://github.com/shuind/dsh-codex-harness/releases) 页面下载对应版本的 `.tgz` 安装包（如 `shuind-dsh-codex-harness-0.3.1.tgz`）。
 2. 打开 Harness 桌面端的 **插件 → 添加插件**，填入该 `.tgz` 文件的本地路径确认安装，然后重启 Harness。
 
 > 桌面端请直接在软件内的插件页面安装或升级，不要用命令行里可能存在的旧版 `dsh` 去改桌面端的 `desktop` profile。

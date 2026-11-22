@@ -1,6 +1,6 @@
 # 跨预设工具覆盖
 
-版本 `0.3.0`，目标运行时 DeepSeek Harness `>=0.2.2-rc.1 <=0.2.2-rc.4`。工具覆盖是独立 Host 插件，行 id 为 `codex-tool-policy`，默认 `rules: []`，不会自动改变任何预设。
+版本 `0.3.1`，目标运行时 DeepSeek Harness `>=0.2.2-rc.1 <=0.2.2-rc.5`。工具覆盖是独立 Host 插件，行 id 为 `codex-tool-policy`，默认 `rules: []`，不会自动改变任何预设。
 
 ## 改什么，不改什么
 

@@ -42,7 +42,7 @@ dry-run contains the current `lib/` files, generated `cordis.patch.yml`, preset
 sources, exported locales and icon. The generated patch must declare
 `@deepseek-ai/dsh-agent-preset`; it must not mount the legacy directory installer.
 
-The `0.3.0` build targets Harness `0.2.2-rc.1`–`0.2.2-rc.4` (`>=0.2.2-rc.1 <=0.2.2-rc.4`). Keep that exact engine
+The `0.3.1` build targets Harness `0.2.2-rc.1`–`0.2.2-rc.5` (`>=0.2.2-rc.1 <=0.2.2-rc.5`). Keep that exact engine
 requirement until another runtime has been verified. Do not publish as part of
 an ordinary adaptation task unless the user explicitly requests publishing.
 

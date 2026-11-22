@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 (2026-11-22)
+
+- **适配 DeepSeek Harness `0.2.2-rc.5`**：
+  - 将 `engines.dsh` 范围扩展至 `>=0.2.2-rc.1 <=0.2.2-rc.5`，并将全部 `@deepseek-ai/dsh-*` 开发依赖与传递 peer 依赖对齐验证到 `0.2.2-rc.5`。
+- **修复从 GitHub 源码安装触发的 `TS2883` 构建错误**：
+  - 为 `src/policy/rule-resolver.ts` 与 `src/entries/preferences.ts` 的 `Config` 补齐显式可移植类型标注，避免在 `pnpm v11` 严格依赖布局下导出 `.d.ts` 时引用非直接依赖 `@deepseek-ai/cosmokit`。
+- **市场元数据维护**：
+  - 新增 256px 栅格市场图标 `assets/codex-icon-256.png`，并将 `screenshots.json` 迁移为相对路径。
+
 ## 0.3.0 (2026-11-18)
 
 本版本整合 `0.2.22`–`0.2.40`（本地重构与适配，含 npm `0.2.32-dsh-v0.2.2-rc.1` 之后的演进）并新增以下改进与修复，作为面向 DeepSeek Harness `0.2.2-rc.1`–`0.2.2-rc.4`（`>=0.2.2-rc.1 <=0.2.2-rc.4`）的 `0.3.0` 正式发布版本：
