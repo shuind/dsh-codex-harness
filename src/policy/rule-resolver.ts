@@ -12,7 +12,7 @@ export interface Config {
 }
 
 // Root volatility keeps saving future-Agent rules from unloading live overlays.
-export const Config = z.object({
+export const Config: z<Config, Config, 'volatile'> = z.object({
   rules: z.array(z.object({
     preset: z.string().required().description('Exact preset id; only Agents created after this plugin loads are affected.'),
     // Bare Schemastery arrays default to []; a union preserves omitted masks.
@@ -31,7 +31,7 @@ export const Config = z.object({
       text: z.string().max(1_000_000).required(),
     }))]).description('Exact current-preset prompt replacements. Order, interpolation and complete semantics remain Host-owned.'),
   })).default([]),
-}).volatile()
+}).volatile() as unknown as z<Config, Config, 'volatile'>
 
 /** Loader activations receive a volatile reference; direct callers may pass plain rules. */
 export type ToolPolicyConfigSource = Config | ReturnType<typeof Config>
