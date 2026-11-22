@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dist_tag:
+        description: 'npm dist-tag (default: latest)'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify, Publish npm & GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Ensure npm >= 11.5.1 for Trusted Publishing (OIDC)
+        run: |
+          npm --version
+          node -e "
+            const [maj, min, pat] = process.argv[1].split('.').map(Number);
+            const ok = maj > 11 || (maj === 11 && (min > 5 || (min === 5 && pat >= 1)));
+            process.exit(ok ? 0 : 1);
+          " "$(npm --version)" || npm install -g npm@latest
+          npm --version
+
+      - name: Enable Corepack & pnpm
+        run: |
+          corepack enable
+          corepack pnpm --version
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Resolve version & validate tag
+        id: meta
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v${VERSION}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "${TAG}" ]]; then
+            echo "Error: git tag (${GITHUB_REF_NAME}) does not match package.json version (${VERSION})" >&2
+            exit 1
+          fi
+          DIST_TAG="${{ inputs.dist_tag || 'latest' }}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Typecheck, test, build, and pack check
+        run: |
+          corepack pnpm run check
+          corepack pnpm test
+          corepack pnpm run build
+          corepack pnpm run pack:check
+
+      - name: Pack release tarball
+        id: pack
+        shell: bash
+        run: |
+          corepack pnpm pack
+          TGZ="shuind-dsh-codex-harness-${{ steps.meta.outputs.version }}.tgz"
+          test -f "$TGZ"
+          echo "tgz=${TGZ}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          DIST_TAG="${{ steps.meta.outputs.dist_tag }}"
+          if npm view "@shuind/dsh-codex-harness@${VERSION}" version --registry https://registry.npmjs.org/ >/dev/null 2>&1; then
+            echo "@shuind/dsh-codex-harness@${VERSION} is already published on npm; skipping npm publish."
+            exit 0
+          fi
+          if [[ -n "${NPM_TOKEN}" ]]; then
+            npm config set //registry.npmjs.org/:_authToken "${NPM_TOKEN}"
+            npm publish --access public --tag "${DIST_TAG}" --registry https://registry.npmjs.org/
+          else
+            # Uses npm Trusted Publishing (OIDC) without storing a long-lived token.
+            npm publish --provenance --access public --tag "${DIST_TAG}" --registry https://registry.npmjs.org/
+          fi
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          TGZ="${{ steps.pack.outputs.tgz }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${TGZ}" --clobber
+          else
+            gh release create "${TAG}" "${TGZ}" --title "${TAG}" --generate-notes
+          fi
