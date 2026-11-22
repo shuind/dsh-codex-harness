@@ -29,12 +29,12 @@ async function fetchInCodexScope(): Promise<Response> {
 }
 
 async function waitForFiles(directory: string): Promise<string[]> {
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 100; attempt++) {
     if (existsSync(directory)) {
       const files = readdirSync(directory).filter(name => name.endsWith('.json') && !name.startsWith('.'))
       if (files.length > 0) return files
     }
-    await new Promise<void>(resolve => setImmediate(resolve))
+    await new Promise<void>(resolve => setTimeout(resolve, 10))
   }
   return []
 }
