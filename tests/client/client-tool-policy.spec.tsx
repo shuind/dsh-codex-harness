@@ -10,8 +10,8 @@ vi.mock('react', async importOriginal => ({
     if (!previous || deps.some((value, i) => value !== previous[i])) hooks.effects.push(effect); hooks.values[index] = deps },
   useSyncExternalStore(_subscribe: unknown, read: () => unknown) { return read() },
 }))
-import { bindToolPolicy, validateToolPolicyRules, saveToolPolicy, ToolPolicySection, ToolPolicySettingsCard, toolPolicyEn, toolPolicyZh, withToolAction } from '../../src/client/tool-policy.tsx'
-import type { ToolPolicyMode } from '../../src/client/tool-policy.tsx'
+import { bindToolPolicy, resolveGptCapabilities, validateToolPolicyRules, saveToolPolicy, ToolPolicySection, ToolPolicySettingsCard, toolPolicyEn, toolPolicyZh, withToolAction } from '../../src/client/tool-policy.tsx'
+import type { GptCapabilitiesState, ToolPolicyMode } from '../../src/client/tool-policy.tsx'
 import { PresetDefinitionCard } from '../../src/client/preset-manager.tsx'
 import { CodexSettingsTab, RuntimeSettingsEditor, saveDesktopSettings } from '../../src/client/desktop.tsx'
 import type { PresetPromptCatalog, PresetPromptName, ToolPolicyRule, PresetToolCatalog, PresetToolEntry } from '../../src/contracts/tool-policy-contract.ts'
@@ -55,12 +55,12 @@ function managerFor(
   if (catalog === undefined) cachePresetCatalog(manager as never, { presets: ['standard', 'minimal'].map(id => ({ id, name: id, description: '', isDefault: false })), excludedCount: 0 })
   return manager
 }
-function editor(rules: readonly ToolPolicyRule[] = [], manager = managerFor()) {
+function editor(rules: readonly ToolPolicyRule[] = [], manager = managerFor(), gptCapabilities?: GptCapabilitiesState) {
   let snapshot = { status: 'ready', value: { rules }, base: {}, user: {}, revision: 7, writable: true }
   const mutate = vi.fn(async (ops: any[], revision?: number) => { if (revision !== snapshot.revision) return false
     snapshot = { ...snapshot, revision: snapshot.revision + 1, value: { rules: ops[0].value } }; return true })
   const form = { getSnapshot: () => snapshot, subscribe: () => () => {}, mutate }
-  const props = { form, presetManager: manager, mode: 'tools', t: (key: string) => key } as any
+  const props = { form, presetManager: manager, mode: 'tools', gptCapabilities, t: (key: string) => key } as any
   const render = () => { hooks.cursor = 0; const tree = ToolPolicySettingsCard(props)
     hooks.effects.splice(0).forEach(effect => { const cleanup = effect(); if (typeof cleanup === 'function') hooks.cleanups.push(cleanup as () => unknown) }); return tree }
   return { form, mutate, manager, render, mode: (mode: ToolPolicyMode) => { props.mode = mode; return render() }, snapshot: (patch: Partial<typeof snapshot>) => { snapshot = { ...snapshot, ...patch } },
@@ -390,5 +390,60 @@ describe('prompt overrides, runtime settings, and read-only preset definition vi
     hooks.cursor = 0; rt = RuntimeSettingsEditor(runtimeProps)
     element(rt, node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await settle()
     expect(mutate).toHaveBeenLastCalledWith([{ op: 'set', path: ['fast'], value: true }], 3)
+  })
+
+  it('pins a top GPT capabilities group for GPT-sourced search, image generation, and read-only compaction', async () => {
+    const gptTools: PresetToolEntry[] = [
+      ...registered,
+      { name: 'web_search', description: 'Search the web', conditional: false, replacements: [] },
+      { name: 'codex_connect_image_generate', description: 'Generate or edit images', conditional: false, replacements: [] },
+    ]
+    const caps = resolveGptCapabilities(
+      { hostedWebSearchEnabled: true, remoteCompactionEnabled: true },
+      {
+        status: 'ready',
+        writable: true,
+        searchEnabled: true,
+        searchModel: 'gpt-6.2-sol',
+        imageGenerationEnabled: true,
+        imageModelHint: 'gpt-image-2.6-sunburst',
+      },
+    )
+    const ui = editor([], managerFor(vi.fn(async (id: string) => ({ ok: true, value: inventory(id, gptTools) }))), caps)
+    let tree = await ui.ready()
+    const groups = elements(tree, node => typeof node.props?.['data-tool-group'] === 'string')
+    expect(groups[0]?.props['data-tool-group']).toBe('gpt')
+    const gptGroup = groups[0]!
+    expect(element(gptGroup, node => node.props?.['data-tool-name'] === 'web_search')).toBeDefined()
+    expect(element(gptGroup, node => node.props?.['data-tool-name'] === 'codex_connect_image_generate')).toBeDefined()
+    expect(element(gptGroup, node => node.props?.['data-gpt-capability'] === 'compaction')).toBeDefined()
+    expect(element(gptGroup, node => node.props?.['data-tone'] === 'gpt' && node.props.children === 'toolPolicyGptDualSearch')).toBeDefined()
+    expect(element(gptGroup, node => node.props?.['data-tone'] === 'gpt' && node.props.children === 'GPT-Image-2.6 Sunburst')).toBeDefined()
+    expect(element(gptGroup, node => node.props?.['data-tone'] === 'gpt' && node.props.children === 'toolPolicyGptCompactionBadge')).toBeDefined()
+    expect(actionGroup(gptGroup, '/compact')).toBeUndefined()
+
+    labelled(tree, 'toolPolicySearch').props.onChange({ target: { value: 'compact' } })
+    tree = ui.render()
+    expect(element(tree, node => node.props?.['data-gpt-capability'] === 'compaction')).toBeDefined()
+
+    labelled(tree, 'toolPolicySearch').props.onChange({ target: { value: '' } })
+    filterButton(tree, 'modified').props.onClick()
+    tree = ui.render()
+    expect(element(tree, node => node.props?.['data-gpt-capability'] === 'compaction')).toBeUndefined()
+
+    hooks.values = []; hooks.cursor = 0; hooks.effects = []
+    const nonGptTools: PresetToolEntry[] = [
+      ...registered,
+      { name: 'web_search', description: 'Search the web', conditional: false, replacements: [] },
+    ]
+    const offCaps = resolveGptCapabilities(
+      { hostedWebSearchEnabled: false, remoteCompactionEnabled: false },
+      { status: 'ready', writable: true, searchEnabled: false, nativeCompaction: false, imageGenerationEnabled: false },
+    )
+    const uiOff = editor([], managerFor(vi.fn(async (id: string) => ({ ok: true, value: inventory(id, nonGptTools) }))), offCaps)
+    const treeOff = await uiOff.ready()
+    expect(element(treeOff, node => node.props?.['data-tool-group'] === 'gpt')).toBeUndefined()
+    const otherGroup = element(treeOff, node => node.props?.['data-tool-group'] === 'other')
+    expect(element(otherGroup, node => node.props?.['data-tool-name'] === 'web_search')).toBeDefined()
   })
 })

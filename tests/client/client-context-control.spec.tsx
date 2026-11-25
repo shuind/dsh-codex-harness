@@ -121,10 +121,24 @@ describe('context window contracts and composer quick-adjust control', () => {
       status: 'ready',
       view: {
         writable: true,
-        namespaces: [{ ns: OPENAI_CODEX_SETTINGS_NAMESPACE, value: { enableNativeCompaction: false } }],
+        namespaces: [{
+          ns: OPENAI_CODEX_SETTINGS_NAMESPACE,
+          value: {
+            enableNativeCompaction: false,
+            enableSearch: true,
+            searchModel: 'gpt-6.2-sol',
+            enableImageGeneration: true,
+            imageModelHint: 'gpt-image-2.6-sunburst',
+          },
+        }],
       },
     }
-    expect(scope.getSnapshot().nativeCompaction).toBe(false)
+    const snap2 = scope.getSnapshot()
+    expect(snap2.nativeCompaction).toBe(false)
+    expect(snap2.searchEnabled).toBe(true)
+    expect(snap2.searchModel).toBe('gpt-6.2-sol')
+    expect(snap2.imageGenerationEnabled).toBe(true)
+    expect(snap2.imageModelHint).toBe('gpt-image-2.6-sunburst')
     await scope.setNativeCompaction?.(true)
     expect(form.set).toHaveBeenCalledWith('enableNativeCompaction', true)
 

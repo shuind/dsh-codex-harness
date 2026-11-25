@@ -53,6 +53,17 @@ export const toolPolicyEn = {
   toolPolicyConditional: 'Conditional',
   toolPolicyTargetExists: 'Replacement target already exists',
   toolPolicyPresetDisabled: 'Disabled by original preset',
+  toolPolicyGptGroup: 'GPT capabilities',
+  toolPolicyGptHostedSearch: 'GPT hosted search',
+  toolPolicyGptHostedSearchTitle: 'GPT sessions prefer OpenAI Responses hosted web_search (controlled in Runtime preferences).',
+  toolPolicyGptCodexSearch: 'Codex search',
+  toolPolicyGptCodexSearchTitle: 'Profile-wide web search owned by Codex Connect.',
+  toolPolicyGptDualSearch: 'GPT hosted / Codex search',
+  toolPolicyGptDualSearchTitle: 'GPT sessions prefer OpenAI hosted web_search; other models use Codex Connect search.',
+  toolPolicyGptImageTitle: 'Provided by Codex Connect (ChatGPT subscription GPT Image); callable from any tool-capable model.',
+  toolPolicyGptCompactionDesc: 'Server-side native context compaction (GPT sessions only; falls back to local summary on failure)',
+  toolPolicyGptCompactionBadge: 'GPT native compaction',
+  toolPolicyGptCompactionReadOnly: 'Non-tool · Runtime preference',
   toolPolicyCommandGroup: 'Commands & runtime',
   toolPolicyFileGroup: 'Files & search',
   toolPolicyPlanGroup: 'Planning & interaction',
@@ -180,6 +191,17 @@ export const toolPolicyZh: Record<keyof typeof toolPolicyEn, string> = {
   toolPolicyConditional: '按条件可用',
   toolPolicyTargetExists: '替换目标已存在',
   toolPolicyPresetDisabled: '原预设未启用',
+  toolPolicyGptGroup: 'GPT 能力',
+  toolPolicyGptHostedSearch: 'GPT 托管搜索',
+  toolPolicyGptHostedSearchTitle: 'GPT 会话优先使用 OpenAI Responses 原生托管搜索（由「运行偏好」控制）。',
+  toolPolicyGptCodexSearch: 'Codex 订阅搜索',
+  toolPolicyGptCodexSearchTitle: '由 Codex Connect 接管当前配置全局联网搜索。',
+  toolPolicyGptDualSearch: 'GPT 托管 / Codex 搜索',
+  toolPolicyGptDualSearchTitle: 'GPT 会话优先使用 OpenAI 原生托管搜索；其他模型走 Codex Connect 订阅搜索。',
+  toolPolicyGptImageTitle: '来源于 Codex Connect（ChatGPT 订阅生图接口），支持工具调用的模型均可调用。',
+  toolPolicyGptCompactionDesc: '使用 OpenAI 服务端原生压缩替代默认文本摘要（仅 GPT 会话，失败自动回退）',
+  toolPolicyGptCompactionBadge: 'GPT 原生压缩',
+  toolPolicyGptCompactionReadOnly: '非工具 · 运行偏好控制',
   toolPolicyCommandGroup: '命令与执行',
   toolPolicyFileGroup: '文件与检索',
   toolPolicyPlanGroup: '规划与交互',
@@ -269,9 +291,11 @@ const collabNames = new Set([
   'team_task_list', 'team_task_update',
 ])
 
-export type ToolGroupId = 'command' | 'file' | 'plan' | 'collab' | 'other'
+export type ToolGroupId = 'gpt' | 'command' | 'file' | 'plan' | 'collab' | 'other'
 
-export function groupOf(tool: PresetToolEntry): ToolGroupId {
+export function groupOf(tool: PresetToolEntry, gptSearchActive = false): ToolGroupId {
+  if (tool.name === 'codex_connect_image_generate') return 'gpt'
+  if (tool.name === 'web_search' && gptSearchActive) return 'gpt'
   if (commandNames.has(tool.name) || tool.replacements.some(item => item.action === 'codex-exec')) return 'command'
   if (fileNames.has(tool.name) || tool.replacements.some(item => item.action === 'codex-patch')) return 'file'
   if (planNames.has(tool.name) || tool.replacements.some(item => item.action === 'codex-plan')) return 'plan'
@@ -348,6 +372,7 @@ export const policyStyles = `
 .codex-tool-policy .codex-tool-policy-description { font-size:12px; color:var(--dsw-alias-label-secondary); }
 .codex-tool-policy .codex-badge { font-size:11px; line-height:16px; padding:1px 6px; border-radius:999px; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-secondary); border:0.5px solid var(--dsw-alias-border-l2); }
 .codex-tool-policy .codex-badge[data-tone=blue] { background:var(--dsw-alias-interactive-bg-selected, rgba(59,130,246,0.12)); color:var(--dsw-static-blue-500, var(--dsw-alias-brand-primary)); border-color:transparent; }
+.codex-tool-policy .codex-badge[data-tone=gpt] { background:var(--dsw-alias-state-success-bg, rgba(16,163,127,0.12)); color:var(--dsw-alias-state-success-primary, #10a37f); border-color:transparent; font-weight:500; }
 .codex-tool-policy .codex-badge[data-tone=warn] { color:var(--dsw-alias-state-warn-primary); }
 .codex-tool-policy .codex-tool-policy-action { display:flex; align-items:center; gap:6px; flex-shrink:0; }
 .codex-tool-policy .codex-tool-policy-prompts { display:flex; flex-direction:column; gap:10px; }

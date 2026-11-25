@@ -15,6 +15,7 @@ import type {
   PresetToolEntry, ToolAction, ToolActionContext, ToolPolicyRule,
 } from '../contracts/tool-policy-contract.ts'
 import { PRESET_PROMPT_NAMES } from '../contracts/ui-contracts.ts'
+import type { CodexConnectSnapshot } from '../contracts/ui-contracts.ts'
 import { acceptPresetSave, editPresetDraft, preparePresetSave, presetRules, sameRules } from './policy-drafts.ts'
 import type { PresetDrafts } from './policy-drafts.ts'
 import { groupOf, humanLabels, policyStyles, toolPolicyEn, toolPolicyZh } from './policy-locale.ts'
@@ -86,14 +87,55 @@ export function saveToolPolicy(form: ToolPolicyForm, rules: readonly ToolPolicyR
   return form.mutate([{ op: 'set', path: ['rules'], value }], revision)
 }
 
+export interface GptCapabilitiesState {
+  readonly hostedWebSearch: boolean
+  readonly codexSearch: boolean
+  readonly codexSearchModel?: string | undefined
+  readonly remoteCompaction: boolean
+  readonly imageGeneration: boolean
+  readonly imageModelHint?: string | undefined
+}
+
+export function resolveGptCapabilities(
+  codexSettings?: { readonly hostedWebSearchEnabled?: boolean; readonly remoteCompactionEnabled?: boolean } | undefined,
+  codexConnect?: CodexConnectSnapshot | undefined,
+): GptCapabilitiesState | undefined {
+  const connectReady = codexConnect?.status === 'ready'
+  if (codexSettings === undefined && !connectReady) return undefined
+  return {
+    hostedWebSearch: codexSettings !== undefined ? (codexSettings.hostedWebSearchEnabled ?? true) : false,
+    codexSearch: connectReady && codexConnect.searchEnabled === true,
+    codexSearchModel: connectReady ? codexConnect.searchModel : undefined,
+    remoteCompaction: (codexSettings !== undefined && (codexSettings.remoteCompactionEnabled ?? true))
+      || (connectReady && codexConnect.nativeCompaction === true),
+    imageGeneration: connectReady && codexConnect.imageGenerationEnabled === true,
+    imageModelHint: connectReady ? codexConnect.imageModelHint : undefined,
+  }
+}
+
+function formatGptImageBadge(hint: string | undefined): string {
+  const value = hint?.trim() ?? ''
+  if (!value || value === 'gpt-image-2.6-flare') return 'GPT-Image-2.6 Flare'
+  if (value === 'gpt-image-2.6-sunburst') return 'GPT-Image-2.6 Sunburst'
+  return value
+}
+
 export type ToolPolicySubMode = 'tools' | 'prompts' | 'definition'
 export type ToolPolicyMode = ToolPolicySubMode | 'inactive'
-type PolicyProps = PropsLocale<'codex'> & { presetManager?: PresetManagerActions | undefined; mode?: ToolPolicyMode }
+type PolicyProps = PropsLocale<'codex'> & {
+  presetManager?: PresetManagerActions | undefined
+  mode?: ToolPolicyMode
+  gptCapabilities?: GptCapabilitiesState | undefined
+}
 type ToolsView = { preset: string; status: 'loading' | 'ready' | 'error'; value?: PresetToolCatalog }
 type PromptsView = { preset: string; status: 'loading' | 'ready' | 'error'; value?: PresetPromptCatalog }
 const isPromptName = (name: string): name is PresetPromptName => (PRESET_PROMPT_NAMES as readonly string[]).includes(name)
 
-const GROUP_META: readonly { id: ToolGroupId; labelKey: 'toolPolicyCommandGroup' | 'toolPolicyFileGroup' | 'toolPolicyPlanGroup' | 'toolPolicyCollabGroup' | 'toolPolicyOtherGroup' }[] = [
+const GROUP_META: readonly {
+  id: ToolGroupId
+  labelKey: 'toolPolicyGptGroup' | 'toolPolicyCommandGroup' | 'toolPolicyFileGroup' | 'toolPolicyPlanGroup' | 'toolPolicyCollabGroup' | 'toolPolicyOtherGroup'
+}[] = [
+  { id: 'gpt', labelKey: 'toolPolicyGptGroup' },
   { id: 'command', labelKey: 'toolPolicyCommandGroup' },
   { id: 'file', labelKey: 'toolPolicyFileGroup' },
   { id: 'plan', labelKey: 'toolPolicyPlanGroup' },
@@ -106,7 +148,7 @@ export function ToolPolicySection({ binding, ...props }: { binding: ToolPolicyBi
   return form === undefined ? null : <ToolPolicySettingsCard form={form} {...props} />
 }
 
-export function ToolPolicySettingsCard({ form, presetManager, mode = 'tools', t }: { form: ToolPolicyForm } & PolicyProps) {
+export function ToolPolicySettingsCard({ form, presetManager, mode = 'tools', gptCapabilities, t }: { form: ToolPolicyForm } & PolicyProps) {
   const snapshot = useSyncExternalStore(listener => form.subscribe(listener), () => form.getSnapshot(), () => form.getSnapshot())
   const [subMode, setSubMode] = useState<ToolPolicySubMode>(mode === 'prompts' || mode === 'definition' ? mode : 'tools')
   const prevMode = useRef(mode)
@@ -273,15 +315,41 @@ export function ToolPolicySettingsCard({ form, presetManager, mode = 'tools', t 
   const changeSummary = summaryParts.join(' · ') || t(currentDraft && !sameRules(beforeTarget, currentDraft.rules) ? 'toolPolicyRuleChanged' : 'toolPolicyNoToolDelta')
   const unavailable = (reason: 'conditional' | 'target-exists' | undefined) => t(reason === 'conditional' ? 'toolPolicyConditional' : reason === 'target-exists' ? 'toolPolicyTargetExists' : 'toolPolicyUnsupported')
 
-  const renderRows = (tools: readonly PresetToolEntry[]) => <div className="codex-tool-policy-table" role="table" aria-label={t('toolPolicyTitle')}>
+  const gptSearchActive = gptCapabilities?.hostedWebSearch === true || gptCapabilities?.codexSearch === true
+  const gptBadgeFor = (tool: PresetToolEntry): { label: string; title: string } | undefined => {
+    if (tool.name === 'codex_connect_image_generate') {
+      return { label: formatGptImageBadge(gptCapabilities?.imageModelHint), title: t('toolPolicyGptImageTitle') }
+    }
+    if (tool.name === 'web_search' && gptSearchActive) {
+      const model = gptCapabilities?.codexSearchModel
+      if (gptCapabilities?.hostedWebSearch && gptCapabilities?.codexSearch) {
+        return {
+          label: t('toolPolicyGptDualSearch'),
+          title: model ? `${t('toolPolicyGptDualSearchTitle')} (${model})` : t('toolPolicyGptDualSearchTitle'),
+        }
+      }
+      if (gptCapabilities?.hostedWebSearch) {
+        return { label: t('toolPolicyGptHostedSearch'), title: t('toolPolicyGptHostedSearchTitle') }
+      }
+      return {
+        label: model ? `${t('toolPolicyGptCodexSearch')} · ${model}` : t('toolPolicyGptCodexSearch'),
+        title: model ? `${t('toolPolicyGptCodexSearchTitle')} (${model})` : t('toolPolicyGptCodexSearchTitle'),
+      }
+    }
+    return undefined
+  }
+
+  const renderRows = (tools: readonly PresetToolEntry[], includeCompaction = false) => <div className="codex-tool-policy-table" role="table" aria-label={t('toolPolicyTitle')}>
     {tools.map(tool => {
       const action = chosen(tool); const deferReason = deferUnavailableReason(tool)
       const supported = action === 'keep' || action === 'hide' || action === 'defer' || tool.replacements.some(option => option.action === action)
       const custom = customized(tool); const hasOverride = !!rule?.tools?.some(choice => choice.name === tool.name)
+      const gptBadge = gptBadgeFor(tool)
       return <div key={tool.name} role="row" className="codex-tool-policy-tool" data-tool-name={tool.name} data-tool-action={action}>
         <div role="cell" className="codex-tool-policy-name">
           <code className="codex-tool-policy-identifier">{tool.name}</code>
           <span className="codex-tool-policy-description" title={tool.description}>{human(tool)}</span>
+          {gptBadge && <span className="codex-badge" data-tone="gpt" title={gptBadge.title}>{gptBadge.label}</span>}
           {tool.defaultDeferred && !custom && <span className="codex-badge" data-tone="blue">{t('toolPolicyDefaultDeferred')}</span>}
           {custom && <span className="codex-badge" data-tone="blue">{t('toolPolicyModified')}</span>}
           {tool.codexTool?.presetEnabled === false && <span className="codex-badge" data-tone="warn">{t('toolPolicyPresetDisabled')}</span>}
@@ -303,7 +371,17 @@ export function ToolPolicySettingsCard({ form, presetManager, mode = 'tools', t 
         </div>
       </div>
     })}
-    {tools.length === 0 && <p className="codex-tool-policy-note" style={{ padding: '12px 14px' }}>{t('toolPolicyNoMatches')}</p>}
+    {includeCompaction && <div key="__gpt_compaction__" role="row" className="codex-tool-policy-tool" data-gpt-capability="compaction">
+      <div role="cell" className="codex-tool-policy-name">
+        <code className="codex-tool-policy-identifier">/compact</code>
+        <span className="codex-tool-policy-description">{t('toolPolicyGptCompactionDesc')}</span>
+        <span className="codex-badge" data-tone="gpt">{t('toolPolicyGptCompactionBadge')}</span>
+      </div>
+      <div role="cell" className="codex-tool-policy-action">
+        <span className="codex-badge">{t('toolPolicyGptCompactionReadOnly')}</span>
+      </div>
+    </div>}
+    {tools.length === 0 && !includeCompaction && <p className="codex-tool-policy-note" style={{ padding: '12px 14px' }}>{t('toolPolicyNoMatches')}</p>}
   </div>
 
   if (snapshot.status !== 'ready' || snapshot.value === undefined || mode === 'inactive') return null
@@ -311,8 +389,14 @@ export function ToolPolicySettingsCard({ form, presetManager, mode = 'tools', t 
   const isFiltering = text.length > 0 || filter !== 'all'
   const allTools = inventory?.tools ?? []
   const hasReplaceable = allTools.some(tool => tool.replacements.some(option => option.available))
-  const shown = allTools.filter(tool => (!text || `${human(tool)} ${tool.name} ${tool.description}`.toLowerCase().includes(text))
-    && (filter === 'all' || (filter === 'modified' ? customized(tool) : filter === 'deferred' ? chosen(tool) === 'defer' : tool.replacements.some(option => option.available))))
+  const shown = allTools.filter(tool => {
+    const gptBadge = gptBadgeFor(tool)
+    const haystack = `${human(tool)} ${tool.name} ${tool.description} ${gptBadge?.label ?? ''}`.toLowerCase()
+    return (!text || haystack.includes(text))
+      && (filter === 'all' || (filter === 'modified' ? customized(tool) : filter === 'deferred' ? chosen(tool) === 'defer' : tool.replacements.some(option => option.available)))
+  })
+  const compactionSearchText = `/compact compaction ${t('toolPolicyGptCompactionDesc')} ${t('toolPolicyGptCompactionBadge')} gpt`.toLowerCase()
+  const showCompactionRow = gptCapabilities?.remoteCompaction === true && filter === 'all' && (!text || compactionSearchText.includes(text))
 
   return <section className="codex-tool-policy" aria-label={t(activeSub === 'prompts' ? 'settingsPresetPrompts' : 'toolPolicyTitle')}>
     <style>{policyStyles}</style>
@@ -352,15 +436,18 @@ export function ToolPolicySettingsCard({ form, presetManager, mode = 'tools', t 
           </div>
           {presetManager && selectedId && <button type="button" className="codex-btn" disabled={toolsStatus === 'loading'} onClick={() => loadTools(true)}>{t('toolPolicyToolsRefresh')}</button>}
         </div>}
-        {inventory && !duplicate && (isFiltering && shown.length === 0
+        {inventory && !duplicate && (isFiltering && shown.length === 0 && !showCompactionRow
           ? <div className="codex-card">{renderRows(shown)}</div>
           : GROUP_META.map(group => {
-            const tools = shown.filter(tool => groupOf(tool) === group.id); if (!tools.length) return null
+            const tools = shown.filter(tool => groupOf(tool, gptSearchActive) === group.id)
+            const includeCompaction = group.id === 'gpt' && showCompactionRow
+            if (!tools.length && !includeCompaction) return null
             const changes = tools.filter(customized).length; const key = `${selectedId}/${group.id}`
+            const count = tools.length + (includeCompaction ? 1 : 0)
             return <details key={group.id} className="codex-group" data-tool-group={group.id} open={isFiltering ? true : (groupOpen.get(key) ?? true)}
               onToggle={event => { const open = event.currentTarget.open; setGroupOpen(previous => new Map(previous).set(key, open)) }}>
-              <summary><span>{t(group.labelKey)}</span><span className="codex-tool-policy-note">{tools.length}{changes ? ` · ${changes} ${t('toolPolicyCustomized')}` : ''}</span></summary>
-              {renderRows(tools)}
+              <summary><span>{t(group.labelKey)}</span><span className="codex-tool-policy-note">{count}{changes ? ` · ${changes} ${t('toolPolicyCustomized')}` : ''}</span></summary>
+              {renderRows(tools, includeCompaction)}
             </details>
           }))}
       </>}

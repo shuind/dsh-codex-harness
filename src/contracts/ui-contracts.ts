@@ -158,6 +158,10 @@ export interface CodexConnectSnapshot {
   readonly overrides?: Readonly<Record<string, number | null>> | undefined
   readonly baseOverrides?: Readonly<Record<string, number | null>> | undefined
   readonly nativeCompaction?: boolean | undefined
+  readonly searchEnabled?: boolean | undefined
+  readonly searchModel?: string | undefined
+  readonly imageGenerationEnabled?: boolean | undefined
+  readonly imageModelHint?: string | undefined
 }
 
 export interface CodexConnectScope {

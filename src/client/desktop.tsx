@@ -1,5 +1,5 @@
 /** A single Settings workspace; the bundle page is only a signpost. */
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
@@ -17,7 +17,7 @@ import {
   OPENAI_CODEX_SETTINGS_NAMESPACE,
 } from '../contracts/ui-contracts.ts'
 import type { PresetClientRemote } from './preset-manager.tsx'
-import { bindToolPolicy, ToolPolicySection } from './tool-policy.tsx'
+import { bindToolPolicy, resolveGptCapabilities, ToolPolicySection } from './tool-policy.tsx'
 import type { ToolPolicyBinding, ToolPolicyMode } from './tool-policy.tsx'
 
 export interface DesktopConfigForm extends Pick<CodexScope, 'getSnapshot' | 'subscribe'> {
@@ -60,6 +60,26 @@ function asOverrides(value: unknown): Record<string, number | null> | undefined 
   }
   return out
 }
+function projectCodexConnectRecord(
+  record: Record<string, unknown>,
+  baseRecord: Record<string, unknown> | undefined,
+  writable: boolean,
+): CodexConnectSnapshot {
+  const searchModel = typeof record.searchModel === 'string' && record.searchModel.trim() ? record.searchModel.trim() : undefined
+  const imageModelHint = typeof record.imageModelHint === 'string' ? record.imageModelHint.trim() : undefined
+  return {
+    status: 'ready',
+    writable,
+    overrides: asOverrides(record.contextWindowOverrides),
+    baseOverrides: asOverrides(baseRecord?.contextWindowOverrides),
+    ...(typeof record.enableNativeCompaction === 'boolean' ? { nativeCompaction: record.enableNativeCompaction } : {}),
+    ...(typeof record.enableSearch === 'boolean' ? { searchEnabled: record.enableSearch } : {}),
+    ...(searchModel !== undefined ? { searchModel } : {}),
+    ...(typeof record.enableImageGeneration === 'boolean' ? { imageGenerationEnabled: record.enableImageGeneration } : {}),
+    ...(imageModelHint !== undefined ? { imageModelHint } : {}),
+  }
+}
+
 export function bindCodexConnectScope(configForms: DesktopSettingsContext['configForms']): CodexConnectScope {
   const form = configForms.get(OPENAI_CODEX_SETTINGS_NAMESPACE)
   const mirror = configForms.describe?.()
@@ -75,30 +95,14 @@ export function bindCodexConnectScope(configForms: DesktopSettingsContext['confi
     lastMirrorSnap = mirrorSnap
     const formRecord = formSnap.status === 'ready' ? asRecord(formSnap.value) : undefined
     if (formRecord !== undefined) {
-      return projected = {
-        status: 'ready',
-        writable: formSnap.writable,
-        overrides: asOverrides(formRecord.contextWindowOverrides),
-        baseOverrides: asOverrides(asRecord(formSnap.base)?.contextWindowOverrides),
-        ...(typeof formRecord.enableNativeCompaction === 'boolean'
-          ? { nativeCompaction: formRecord.enableNativeCompaction }
-          : {}),
-      }
+      return projected = projectCodexConnectRecord(formRecord, asRecord(formSnap.base), formSnap.writable)
     }
     const view = mirrorSnap?.view
     if (view !== undefined) {
       const row = view.namespaces?.find(candidate => candidate.ns === OPENAI_CODEX_SETTINGS_NAMESPACE)
       const rowRecord = row === undefined ? undefined : asRecord(row.value)
       if (row === undefined || rowRecord === undefined) return projected = { status: 'unavailable', writable: false }
-      return projected = {
-        status: 'ready',
-        writable: view.writable ?? formSnap.writable,
-        overrides: asOverrides(rowRecord.contextWindowOverrides),
-        baseOverrides: asOverrides(asRecord(row.base)?.contextWindowOverrides),
-        ...(typeof rowRecord.enableNativeCompaction === 'boolean'
-          ? { nativeCompaction: rowRecord.enableNativeCompaction }
-          : {}),
-      }
+      return projected = projectCodexConnectRecord(rowRecord, asRecord(row.base), view.writable ?? formSnap.writable)
     }
     return projected = { status: formSnap.status, writable: formSnap.writable }
   }
@@ -210,9 +214,22 @@ export function RuntimeSettingsEditor({ active, ...props }: DesktopSettingsProps
   </section>
 }
 
+const EMPTY_CONNECT_SUBSCRIBE = () => () => {}
+const EMPTY_CONNECT_SNAPSHOT = (): CodexConnectSnapshot | undefined => undefined
+
 export function CodexSettingsTab(props: DesktopSettingsProps & { initialPage?: SettingsPage }) {
-  const { toolPolicy, presetManager, t } = props
+  const { toolPolicy, presetManager, getCodexConnectScope, t } = props
   const [page, setPage] = useState<SettingsPage>(props.initialPage ?? 'tools')
+  const settingsSnapshot = typeof props.useSettings === 'function'
+    ? props.useSettings(state => state as CodexSettingsSnapshot)
+    : undefined
+  const connectScope = getCodexConnectScope?.()
+  const connectSnapshot = useSyncExternalStore(
+    connectScope ? connectScope.subscribe : EMPTY_CONNECT_SUBSCRIBE,
+    connectScope ? connectScope.getSnapshot : EMPTY_CONNECT_SNAPSHOT,
+    connectScope ? connectScope.getSnapshot : EMPTY_CONNECT_SNAPSHOT,
+  )
+  const gptCapabilities = resolveGptCapabilities(settingsSnapshot?.value, connectSnapshot)
   const mode: ToolPolicyMode = page === 'tools' ? 'tools' : 'inactive'
   return <section className="codex-harness-settings">
     <style>{desktopStyles}</style>
@@ -220,7 +237,7 @@ export function CodexSettingsTab(props: DesktopSettingsProps & { initialPage?: S
       <button type="button" aria-pressed={page === 'tools'} onClick={() => setPage('tools')}>{t('settingsToolsPage')}</button>
       <button type="button" aria-pressed={page === 'runtime'} onClick={() => setPage('runtime')}>{t('settingsRuntimePage')}</button>
     </nav>
-    {toolPolicy !== undefined && <ToolPolicySection binding={toolPolicy} presetManager={presetManager} mode={mode} t={t} />}
+    {toolPolicy !== undefined && <ToolPolicySection binding={toolPolicy} presetManager={presetManager} mode={mode} gptCapabilities={gptCapabilities} t={t} />}
     <RuntimeSettingsEditor {...props} active={page === 'runtime'} />
   </section>
 }
