@@ -15,8 +15,6 @@
 1. 在 [Releases](https://github.com/shuind/dsh-codex-harness/releases) 页面下载对应版本的 `.tgz` 安装包（如 `shuind-dsh-codex-harness-0.3.1.tgz`）。
 2. 打开 Harness 桌面端的 **插件 → 添加插件**，填入该 `.tgz` 文件的本地路径确认安装，然后重启 Harness。
 
-> 桌面端请直接在软件内的插件页面安装或升级，不要用命令行里可能存在的旧版 `dsh` 去改桌面端的 `desktop` profile。
-
 ## 功能概览
 
 - **Codex 常用工具**：
