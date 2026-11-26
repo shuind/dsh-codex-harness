@@ -2,7 +2,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import type { GenerateOptions, Message, StreamChunk, TokenUsage, ToolSchema } from '@deepseek-ai/dsh-llm'
+import { offloadedImageText, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, ImageBlock, Message, StreamChunk, TokenUsage, ToolSchema } from '@deepseek-ai/dsh-llm'
 import { isGptModel, readHostSettings } from '../contracts/settings.ts'
 import {
   collectTrustedCompactionMarkers,
@@ -98,9 +99,37 @@ async function apiHeaders(
   return headers
 }
 
-function textOf(message: Pick<Message, 'content'>): string {
+const VALID_IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+
+function hasValidImageRef(attachment: unknown): attachment is ImageBlock['attachment'] {
+  if (typeof attachment !== 'object' || attachment === null) return false
+  const record = attachment as Record<string, unknown>
+  return typeof record.attachmentId === 'string' && record.attachmentId.length > 0
+    && typeof record.mediaType === 'string' && VALID_IMAGE_MEDIA_TYPES.has(record.mediaType)
+    && typeof record.width === 'number' && typeof record.height === 'number'
+}
+
+function formatOffloadedImage(ctx: Context, block: ImageBlock): string {
+  const attachments = ctx.get('attachments' as never) as { imageHostPath?: (ref: ImageBlock['attachment']) => string | undefined } | undefined
+  const fs = ctx.get('fs' as never) as { processPathFromHostPath?: (hostPath: string) => string | undefined } | undefined
+  const access = typeof attachments?.imageHostPath === 'function' && typeof fs?.processPathFromHostPath === 'function'
+    ? resolveImageAttachmentAccess(attachments as never, hostPath => fs.processPathFromHostPath!(hostPath), block.attachment)
+    : undefined
+  return offloadedImageText(block.attachment, access)
+}
+
+function textOf(ctx: Context, message: Pick<Message, 'content'>): string {
   return message.content
-    .map(block => block.type === 'text' ? block.text : block.type === 'image' ? '[image omitted]' : '')
+    .map(block => {
+      if (block.type === 'text') return block.text
+      if (block.type === 'image') {
+        if (block.offloaded !== true || !hasValidImageRef(block.attachment)) {
+          throw new Error('Codex remote compaction requires the DSH adapter for image attachments')
+        }
+        return formatOffloadedImage(ctx, block)
+      }
+      return ''
+    })
     .join('')
 }
 
@@ -112,18 +141,18 @@ function stripCompactionPrompt(messages: readonly RequestMessage[]): readonly Re
   return messages
 }
 
-function extractInstructions(options: GenerateOptions, messages: readonly RequestMessage[]): string | undefined {
+function extractInstructions(ctx: Context, options: GenerateOptions, messages: readonly RequestMessage[]): string | undefined {
   if (options.system !== undefined) return options.system
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!
     if (message.role !== 'system') continue
-    const text = textOf(message)
+    const text = textOf(ctx, message)
     return text.length > 0 ? text : undefined
   }
   return undefined
 }
 
-function responsesInput(messages: readonly RequestMessage[]): JsonObject[] {
+function responsesInput(ctx: Context, messages: readonly RequestMessage[]): JsonObject[] {
   const result: JsonObject[] = []
   for (const message of messages) {
     // This compact transport cannot serialize attachment file references losslessly.
@@ -131,7 +160,7 @@ function responsesInput(messages: readonly RequestMessage[]): JsonObject[] {
       throw new Error('Codex remote compaction requires the DSH adapter for attachments')
     }
     if (message.role === 'system') continue
-    const text = textOf(message)
+    const text = textOf(ctx, message)
     if (message.role === 'tool') {
       result.push({ type: 'function_call_output', call_id: message.toolCallId.split('|')[0]!, output: text })
       continue
@@ -175,17 +204,18 @@ function responsesTools(tools: readonly ToolSchema[] | undefined): JsonObject[] 
 }
 
 function compactBody(
+  ctx: Context,
   options: GenerateOptions,
   wireOptions: CodexRequestWireOptions,
   isV2Responses: boolean,
 ): { body: JsonObject; preCompactInput: JsonObject[] } {
   const messages = stripCompactionPrompt(options.messages)
-  const instructions = extractInstructions(options, messages)
+  const instructions = extractInstructions(ctx, options, messages)
   const tools = responsesTools(options.tools)
   const serviceTier = wireOptions.serviceTier ?? serviceTierOf(options)
   const body: JsonObject = {
     model: options.model,
-    input: responsesInput(messages),
+    input: responsesInput(ctx, messages),
     ...instructions !== undefined ? { instructions } : isV2Responses ? { instructions: '' } : {},
     ...tools === undefined ? {} : { tools },
     ...typeof options.sessionId === 'string' && options.sessionId.length > 0
@@ -325,7 +355,7 @@ async function remoteCompact(
     ...wireOptions,
     trustedCheckpoints: wireOptions.trustedCheckpoints ?? collectTrustedCompactionMarkers(options.messages),
   }
-  const initial = compactBody(options, compactWireOptions, isV2Responses)
+  const initial = compactBody(ctx, options, compactWireOptions, isV2Responses)
   let preCompactInput = initial.preCompactInput
   let response = await sendWithRetry(endpoint, headers, initial.body, options.signal)
 
@@ -334,7 +364,7 @@ async function remoteCompact(
     && canRewriteCompactTools(options, wireOptions)) {
     const errorText = await response.clone().text().catch(() => '')
     if (!CONTEXT_LIMIT_ERROR.test(errorText)) {
-      const reduced = compactBody(options, {
+      const reduced = compactBody(ctx, options, {
         ...compactWireOptions,
         hostedWebSearch: false,
         customApplyPatch: false,

@@ -355,7 +355,7 @@ describe('Codex remote compaction and stream repair', () => {
       })().next()
       expect(typeof zstdCompressSync !== 'function' || zstdSeen).toBe(true)
 
-      // Remote compaction splits composite ids, maps images to placeholders, sends prompt_cache_key, omits max_output_tokens, and caches 404.
+      // Remote compaction splits composite ids, formats offloaded images via DSH placeholder, sends prompt_cache_key, omits max_output_tokens, and caches 404.
       let compactCalls = 0
       let capturedCompact: Record<string, unknown> | undefined
       globalThis.fetch = async (input, init) => {
@@ -366,7 +366,9 @@ describe('Codex remote compaction and stream repair', () => {
       const ctx = {
         get: (name: string) => name === 'settings'
           ? { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { relay: { api: 'openai-responses', baseURL: 'https://compact-404.invalid/v1', apiKeyEnv: 'K' } } } }] }
-          : { resolve: async () => ({ value: 'secret' }) },
+          : name === 'credentials'
+            ? { resolve: async () => ({ value: 'secret' }) }
+            : undefined,
         logger: { warn: () => {} },
       } as unknown as Context
       const opts = {
@@ -375,7 +377,24 @@ describe('Codex remote compaction and stream repair', () => {
         sessionId: 'sess-cache-1',
         maxTokens: 4096,
         messages: [
-          { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image', attachment: {} }] },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'look ' },
+              {
+                type: 'image',
+                offloaded: true,
+                attachment: {
+                  attachmentId: 'sha256:abcdef0123456789',
+                  name: 'shot.png',
+                  mediaType: 'image/png',
+                  width: 800,
+                  height: 600,
+                  bytes: 1024,
+                },
+              },
+            ],
+          },
           { role: 'assistant', content: [{ type: 'tool-call', id: 'call_abc|fc_xyz', name: 'read', arguments: '{}' }] },
           { role: 'tool', toolCallId: 'call_abc|fc_xyz', content: [{ type: 'text', text: 'ok' }] },
           { role: 'user', content: [{ type: 'text', text: 'local instruction' }] },
@@ -388,12 +407,136 @@ describe('Codex remote compaction and stream repair', () => {
       expect(capturedCompact?.prompt_cache_key).toBe('sess-cache-1')
       expect(capturedCompact).not.toHaveProperty('max_output_tokens')
       expect(capturedCompact?.input).toEqual([
-        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'look[image omitted]' }] },
+        {
+          type: 'message',
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: 'look [image omitted to fit request image limits; "shot.png" (sha256:abcdef0123456789). No local normalized image path is available; ask the user to attach it again if needed.]',
+          }],
+        },
         { type: 'function_call', call_id: 'call_abc', name: 'read', arguments: '{}' },
         { type: 'function_call_output', call_id: 'call_abc', output: 'ok' },
       ])
     } finally {
       dispose()
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('ignores non-compaction encrypted_content items such as reasoning in JSON compact responses', async () => {
+    const originalFetch = globalThis.fetch
+    let responseMode: 'reasoning-only' | 'mixed' = 'reasoning-only'
+    globalThis.fetch = async () => Response.json(
+      responseMode === 'reasoning-only'
+        ? {
+          output: [{ type: 'reasoning', id: 'rs_1', encrypted_content: 'reasoning-secret' }],
+        }
+        : {
+          output: [
+            { type: 'reasoning', id: 'rs_1', encrypted_content: 'reasoning-secret' },
+            { type: 'compaction', id: 'cmp_1', encrypted_content: 'real-compaction' },
+          ],
+        },
+    )
+    const ctx = {
+      get: (name: string) => name === 'settings'
+        ? { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { relay: { api: 'openai-responses', baseURL: 'https://reasoning-check.example/v1', apiKeyEnv: 'K' } } } }] }
+        : name === 'credentials'
+          ? { resolve: async () => ({ value: 'secret' }) }
+          : undefined,
+      logger: { warn: () => {} },
+    } as unknown as Context
+    try {
+      const fallbackChunks = await collectChunks(remoteCompactStream(ctx, {
+        provider: 'relay',
+        model: 'gpt-5.4',
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'history' }] },
+          { role: 'user', content: [{ type: 'text', text: 'compact now' }] },
+        ],
+        purpose: 'compaction',
+      } as never, async function* () {
+        yield { type: 'text-delta', index: 0, text: 'local-fallback' } as never
+        yield { type: 'finish', reason: { kind: 'stop' } } as never
+      }))
+      expect(fallbackChunks).toContainEqual(expect.objectContaining({ type: 'text-delta', text: 'local-fallback' }))
+      expect(JSON.stringify(fallbackChunks)).not.toContain('reasoning-secret')
+
+      responseMode = 'mixed'
+      const mixedChunks = await collectChunks(remoteCompactStream(ctx, {
+        provider: 'relay',
+        model: 'gpt-5.4',
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'history' }] },
+          { role: 'user', content: [{ type: 'text', text: 'compact now' }] },
+        ],
+        purpose: 'compaction',
+      } as never, async function* () {
+        yield { type: 'text-delta', index: 0, text: 'local-fallback' } as never
+        yield { type: 'finish', reason: { kind: 'stop' } } as never
+      }))
+      const markerChunk = mixedChunks.find(c => (c as { type?: string }).type === 'text-delta') as { text: string } | undefined
+      expect(markerChunk?.text).toBeDefined()
+      expect(markerChunk!.text).toMatch(/^<codex-remote-compaction>v2:/u)
+      const encoded = markerChunk!.text.replace('<codex-remote-compaction>v2:', '').replace('</codex-remote-compaction>', '')
+      const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as { items: Array<{ type?: string; encrypted_content?: string }> }
+      expect(payload.items.filter(item => item.type === 'compaction')).toEqual([
+        { type: 'compaction', id: 'cmp_1', encrypted_content: 'real-compaction' },
+      ])
+      expect(JSON.stringify(payload)).not.toContain('reasoning-secret')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('falls back to the DSH adapter instead of silently omitting live non-offloaded images during remote compaction', async () => {
+    const originalFetch = globalThis.fetch
+    let fetchCalls = 0
+    globalThis.fetch = async () => {
+      fetchCalls += 1
+      return Response.json({ output: [{ type: 'compaction', encrypted_content: 'should-not-run' }] })
+    }
+    const ctx = {
+      get: (name: string) => name === 'settings'
+        ? { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { relay: { api: 'openai-responses', baseURL: 'https://image-fallback.example/v1', apiKeyEnv: 'K' } } } }] }
+        : name === 'credentials'
+          ? { resolve: async () => ({ value: 'secret' }) }
+          : undefined,
+      logger: { warn: () => {} },
+    } as unknown as Context
+    try {
+      const chunks = await collectChunks(remoteCompactStream(ctx, {
+        provider: 'relay',
+        model: 'gpt-5.4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'inspect this screenshot' },
+              {
+                type: 'image',
+                attachment: {
+                  attachmentId: 'sha256:1234567890abcdef',
+                  name: 'live.png',
+                  mediaType: 'image/png',
+                  width: 800,
+                  height: 600,
+                  bytes: 2048,
+                },
+              },
+            ],
+          },
+          { role: 'user', content: [{ type: 'text', text: 'compact now' }] },
+        ],
+        purpose: 'compaction',
+      } as never, async function* () {
+        yield { type: 'text-delta', index: 0, text: 'adapter-preserved-image' } as never
+        yield { type: 'finish', reason: { kind: 'stop' } } as never
+      }))
+      expect(fetchCalls).toBe(0)
+      expect(chunks).toContainEqual(expect.objectContaining({ type: 'text-delta', text: 'adapter-preserved-image' }))
+    } finally {
       globalThis.fetch = originalFetch
     }
   })

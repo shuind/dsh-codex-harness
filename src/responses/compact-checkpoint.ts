@@ -181,14 +181,8 @@ export async function parseCompactResponsePayload(
     const output = Array.isArray(body.output) ? body.output : []
     const compactions: JsonObject[] = []
     for (const item of output) {
-      if (!isJsonObject(item) || typeof item.encrypted_content !== 'string') continue
-      const encrypted = item.encrypted_content.trim()
-      if (encrypted.length === 0) continue
-      compactions.push({
-        type: 'compaction',
-        encrypted_content: encrypted,
-        ...typeof item.id === 'string' && item.id.length > 0 ? { id: item.id } : {},
-      })
+      const compaction = asCompactionItem(item)
+      if (compaction !== undefined) compactions.push(compaction)
     }
     return {
       compactions,
