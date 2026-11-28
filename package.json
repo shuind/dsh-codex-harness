@@ -1,6 +1,6 @@
 {
   "name": "@shuind/dsh-codex-harness",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "packageManager": "pnpm@9.15.9",
   "description": "Customizable Codex coding preset, tools and Responses enhancements for DeepSeek Harness.",
   "type": "module",

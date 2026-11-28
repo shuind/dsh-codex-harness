@@ -115,8 +115,8 @@ export function resolveGptCapabilities(
 
 function formatGptImageBadge(hint: string | undefined): string {
   const value = hint?.trim() ?? ''
-  if (!value || value === 'gpt-image-2.6-flare') return 'GPT-Image-2.6 Flare'
-  if (value === 'gpt-image-2.6-sunburst') return 'GPT-Image-2.6 Sunburst'
+  if (!value || value === 'gpt-image-2.6-sunburst') return 'GPT-Image-2.6 Sunburst'
+  if (value === 'gpt-image-2.6-flare') return 'GPT-Image-2.6 Flare'
   if (value === 'gpt-image-2') return 'GPT-Image-2'
   return value
 }

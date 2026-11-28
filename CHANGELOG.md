@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2 (2026-11-28)
+
+- **工具页置顶「GPT 能力」分组**：
+  - 在预设工具策略页单独置顶「GPT 能力」分组，高亮展示 GPT 来源的联网搜索（托管搜索 / Codex 搜索 / 双搜索）、`codex_connect_image_generate`（默认徽章与提示注明实测路由至 `GPT-Image-2.6 Sunburst`）以及只读 `/compact` 远程压缩说明行。
+- **修复 GPT 能力徽章未实时刷新问题**：
+  - 在 `src/client/desktop.tsx` 的设置页 `injected()` 中补齐 `getCodexConnectScope` 注入，修改 `dsh-codex-connect` 的生图模型或搜索配置后工具页徽章可实时同步。
+- **远程压缩健壮性修复**：
+  - JSON 压缩响应解析严格校验 `item.type === 'compaction'`，避免将带 `encrypted_content` 的普通推理项（`reasoning`）误认为压缩结果。
+  - 远程压缩遇到未卸载的实时图片内容块时不再静默替换为 `[image omitted]`，而是交回 DSH 适配器回退处理；已显式卸载的图片继续使用标准卸载占位文本。
+- **市场截图维护**：
+  - 更新设置页与上下文容量/远程压缩展示截图。
+
 ## 0.3.1 (2026-11-22)
 
 - **适配 DeepSeek Harness `0.2.2-rc.5`**：

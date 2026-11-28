@@ -423,6 +423,18 @@ describe('prompt overrides, runtime settings, and read-only preset definition vi
     expect(actionGroup(gptGroup, '/compact')).toBeUndefined()
 
     hooks.values = []; hooks.cursor = 0; hooks.effects = []
+    const uiDefaultImage = editor(
+      [],
+      managerFor(vi.fn(async (id: string) => ({ ok: true, value: inventory(id, gptTools) }))),
+      resolveGptCapabilities(
+        { hostedWebSearchEnabled: true, remoteCompactionEnabled: true },
+        { status: 'ready', writable: true, imageGenerationEnabled: true, imageModelHint: '' },
+      ),
+    )
+    const treeDefaultImage = await uiDefaultImage.ready()
+    expect(element(treeDefaultImage, node => node.props?.['data-tone'] === 'gpt' && node.props.children === 'GPT-Image-2.6 Sunburst')).toBeDefined()
+
+    hooks.values = []; hooks.cursor = 0; hooks.effects = []
     const uiImage2 = editor(
       [],
       managerFor(vi.fn(async (id: string) => ({ ok: true, value: inventory(id, gptTools) }))),
