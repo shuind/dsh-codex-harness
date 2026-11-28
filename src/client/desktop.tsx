@@ -263,6 +263,7 @@ export function apply(ctx: Context): void {
         unsetSetting: field => settings.unset(field),
         presetManager,
         toolPolicy,
+        getCodexConnectScope,
         saveSettings: async (edits, revision) => {
           await saveDesktopSettings(form, edits, revision)
           if (typeof edits.remoteCompactionEnabled === 'boolean') {

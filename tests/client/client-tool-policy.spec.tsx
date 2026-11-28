@@ -422,6 +422,21 @@ describe('prompt overrides, runtime settings, and read-only preset definition vi
     expect(element(gptGroup, node => node.props?.['data-tone'] === 'gpt' && node.props.children === 'toolPolicyGptCompactionBadge')).toBeDefined()
     expect(actionGroup(gptGroup, '/compact')).toBeUndefined()
 
+    hooks.values = []; hooks.cursor = 0; hooks.effects = []
+    const uiImage2 = editor(
+      [],
+      managerFor(vi.fn(async (id: string) => ({ ok: true, value: inventory(id, gptTools) }))),
+      resolveGptCapabilities(
+        { hostedWebSearchEnabled: true, remoteCompactionEnabled: true },
+        { status: 'ready', writable: true, imageGenerationEnabled: true, imageModelHint: 'gpt-image-2' },
+      ),
+    )
+    const treeImage2 = await uiImage2.ready()
+    expect(element(treeImage2, node => node.props?.['data-tone'] === 'gpt' && node.props.children === 'GPT-Image-2')).toBeDefined()
+
+    hooks.values = []; hooks.cursor = 0; hooks.effects = []
+    tree = await ui.ready()
+
     labelled(tree, 'toolPolicySearch').props.onChange({ target: { value: 'compact' } })
     tree = ui.render()
     expect(element(tree, node => node.props?.['data-gpt-capability'] === 'compaction')).toBeDefined()

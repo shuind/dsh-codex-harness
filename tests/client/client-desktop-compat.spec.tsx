@@ -188,8 +188,13 @@ for (const { name, runtime, policyServed } of bundleFixtures) {
         tools: Schema.union([Schema.array(Schema.object({ name: Schema.string(), action: Schema.string() }))]),
         promptOverrides: Schema.union([Schema.array(Schema.object({ name: Schema.string(), text: Schema.string() }))]),
       })).default([]) }).toJSON() }
+    let connectRow = { ns: 'llm-openai-codex', revision: 5, applies: 'live', autoGenerate: false, secrets: [],
+      value: { enableSearch: true, enableImageGeneration: true, imageModelHint: 'gpt-image-2.6-sunburst' } as Record<string, unknown>,
+      base: {}, user: {},
+      // Un-rehydratable Host-only schema, mirroring @shuind/dsh-codex-connect in Desktop.
+      schema: { type: 'transform', inner: { type: 'object', dict: {} } } }
     const mutate = vi.fn(async (namespace, ops, expectedRevision) => {
-      const previous = namespace === TOOL_POLICY_NAMESPACE ? policyRow : row
+      const previous = namespace === TOOL_POLICY_NAMESPACE ? policyRow : namespace === 'llm-openai-codex' ? connectRow : row
       if (expectedRevision !== previous.revision) return { ok: false, error: { message: 'settings conflict' } }
       const value: Record<string, unknown> = { ...previous.value }
       for (const op of ops) {
@@ -199,6 +204,10 @@ for (const { name, runtime, policyServed } of bundleFixtures) {
       if (namespace === TOOL_POLICY_NAMESPACE) {
         policyRow = { ...policyRow, revision: policyRow.revision + 1, value }
         return { ok: true, value: policyRow }
+      }
+      if (namespace === 'llm-openai-codex') {
+        connectRow = { ...connectRow, revision: connectRow.revision + 1, value }
+        return { ok: true, value: connectRow }
       }
       row = { ...row, revision: row.revision + 1, value }
       return { ok: true, value: row }
@@ -231,13 +240,14 @@ for (const { name, runtime, policyServed } of bundleFixtures) {
           { name: 'read', description: 'Read file', conditional: false, replacements: [] },
           { name: 'pwsh', description: 'Execute PowerShell', conditional: false,
             replacements: [{ action: 'codex-exec', tools: ['exec_command', 'write_stdin'], available: true }] },
+          { name: 'codex_connect_image_generate', description: 'Generate images', conditional: false, replacements: [] },
         ] } }
       } }, 
     })
     await ctx.plugin(gatewayPlugin).await()
     let servesSettings = true
     ctx.provide('remote.settings', { describe: async () => ({ ok: true, value: { writable: true,
-      namespaces: servesSettings ? [row, ...(policyServed ? [policyRow] : [])] : [] } }), mutate })
+      namespaces: servesSettings ? [row, connectRow, ...(policyServed ? [policyRow] : [])] : [] } }), mutate })
     try {
       await ctx.plugin(settingsPlugin).await()
       await (ctx as any).configForms.describe().ensure()
@@ -270,7 +280,7 @@ for (const { name, runtime, policyServed } of bundleFixtures) {
         expect(actualCatalog.presets[0]?.id).toBe('sdk-preset-id')
         const actualTools = await requestPresetTools(face.presetManager, actualCatalog.presets[0]!.id)
         expect(actualTools.preset).toBe('sdk-preset-id')
-        expect(actualTools.tools.map(tool => tool.name)).toEqual(['read', 'pwsh'])
+        expect(actualTools.tools.map(tool => tool.name)).toEqual(['read', 'pwsh', 'codex_connect_image_generate'])
         const actualPrompts = await requestPresetPrompts(face.presetManager, actualCatalog.presets[0]!.id)
         expect(actualPrompts.preset).toBe('sdk-preset-id')
         expect(actualPrompts.sections[0]?.text).toBe('SDK native persona')
@@ -304,6 +314,19 @@ for (const { name, runtime, policyServed } of bundleFixtures) {
         const tabPage = renderToStaticMarkup(<CodexSettingsTab {...tabFace}
           useSettings={(select: (state: unknown) => unknown) => select(tabFace.hooks.settings.getSnapshot())} t={(key: string) => key} />)
         expect(tabPage).toBe(page)
+        expect(tabPage).toContain('GPT-Image-2.6 Sunburst')
+        const connectScope = tabFace.getCodexConnectScope?.()
+        expect(connectScope).toBeDefined()
+        const onConnectChange = vi.fn()
+        const offConnect = connectScope!.subscribe(onConnectChange)
+        await expect((ctx as any).configForms.get('llm-openai-codex').mutate([{ op: 'set', path: ['imageModelHint'], value: 'gpt-image-2' }], 5)).resolves.toBe(true)
+        offConnect()
+        expect(onConnectChange).toHaveBeenCalled()
+        expect(connectScope!.getSnapshot().imageModelHint).toBe('gpt-image-2')
+        const updatedTabPage = renderToStaticMarkup(<CodexSettingsTab {...tabFace}
+          useSettings={(select: (state: unknown) => unknown) => select(tabFace.hooks.settings.getSnapshot())} t={(key: string) => key} />)
+        expect(updatedTabPage).toContain('GPT-Image-2')
+        expect(updatedTabPage).not.toContain('GPT-Image-2.6 Sunburst')
         expect(face.hooks.settings.getSnapshot().value).not.toHaveProperty('rules')
       } else {
         expect(policyForm).toBeUndefined()
